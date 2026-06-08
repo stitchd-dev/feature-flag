@@ -268,6 +268,12 @@ async fn main() -> anyhow::Result<()> {
                         );
                         let recorder =
                             stitchd_stats_service::bandit::PgRunRecorder::new(pool.clone());
+                        // The allocation last written this tick (used as the
+                        // lifecycle idempotency check: "already committed to a
+                        // single-bucket winner?").
+                        let mut current_allocation: Option<
+                            stitchd_core::rollout::RolloutDistribution,
+                        > = None;
                         match stitchd_stats_service::bandit::run_bandit_reallocation(
                             &reader,
                             &applier,
@@ -280,6 +286,13 @@ async fn main() -> anyhow::Result<()> {
                         .await
                         {
                             Ok(outcome) => {
+                                if let stitchd_stats_service::bandit::BanditRunOutcome::Applied {
+                                    allocation,
+                                    ..
+                                } = &outcome
+                                {
+                                    current_allocation = Some(allocation.clone());
+                                }
                                 if !matches!(
                                     outcome,
                                     stitchd_stats_service::bandit::BanditRunOutcome::NotApplicable
@@ -293,6 +306,51 @@ async fn main() -> anyhow::Result<()> {
                             }
                             Err(e) => {
                                 warn!(experiment_id = %exp.experiment_id, "bandit reallocation failed: {e}");
+                            }
+                        }
+
+                        // ── Autonomous lifecycle pass (FR5) ─────────────────
+                        // After reallocation, detect convergence and apply the
+                        // operator-selected lifecycle policy (advisory /
+                        // auto_commit / auto_rollout). Advisory only records a
+                        // badge; auto_commit/auto_rollout require the opt-in and
+                        // are idempotent across ticks. A no-op for non-bandit /
+                        // unconverged experiments. Errors are logged, never abort
+                        // the schedule update.
+                        {
+                            let transitioner =
+                                stitchd_stats_service::lifecycle::GrpcLifecycleTransitioner::new(
+                                    bandit_exp_client.clone(),
+                                    pool.clone(),
+                                );
+                            match stitchd_stats_service::lifecycle::run_bandit_lifecycle(
+                                &reader,
+                                &applier,
+                                &transitioner,
+                                &recorder,
+                                &exp,
+                                &metrics,
+                                current_allocation.as_ref(),
+                                computed_at,
+                                computed_at,
+                            )
+                            .await
+                            {
+                                Ok(outcome) => {
+                                    if !matches!(
+                                        outcome,
+                                        stitchd_stats_service::lifecycle::LifecycleOutcome::NoAction
+                                    ) {
+                                        info!(
+                                            experiment_id = %exp.experiment_id,
+                                            ?outcome,
+                                            "bandit lifecycle pass complete"
+                                        );
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!(experiment_id = %exp.experiment_id, "bandit lifecycle pass failed: {e}");
+                                }
                             }
                         }
                     }

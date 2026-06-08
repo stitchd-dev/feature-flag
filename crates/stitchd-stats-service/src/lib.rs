@@ -15,6 +15,7 @@ pub mod grpc;
 pub mod interaction_compute;
 pub mod interaction_pairs;
 pub mod job_service;
+pub mod lifecycle;
 pub mod queries;
 pub mod recompute_trigger;
 pub mod results_writer;

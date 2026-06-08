@@ -1018,6 +1018,18 @@ fn distribution_to_json(dist: &RolloutDistribution) -> Value {
     Value::Object(map)
 }
 
+/// Crate-internal re-export of [`build_metric_rewards`] for the lifecycle module
+/// (which builds the same objective posteriors for convergence detection).
+pub(crate) async fn build_metric_rewards_pub(
+    reader: &dyn CellReader,
+    exp: &RunningExperiment,
+    metric: &MetricDefinition,
+    metrics: &HashMap<Uuid, MetricDefinition>,
+    iteration_end: DateTime<Utc>,
+) -> Result<Option<MetricRewards>, anyhow::Error> {
+    build_metric_rewards(reader, exp, metric, metrics, iteration_end).await
+}
+
 /// Read summed per-variant sufficient stats for one objective metric across all
 /// of the experiment's context types, and build a [`MetricRewards`] for it.
 ///
@@ -1607,6 +1619,269 @@ pub async fn run_bandit_reallocation(
                     })
                 }
             }
+        }
+    }
+}
+
+/// Shared test fakes + builders reused by both the [`tests`] module here and the
+/// [`crate::lifecycle`] tests. Richer API (call counts, captured allocations,
+/// recorded-row inspection) than the inline fakes in [`tests`].
+#[cfg(test)]
+pub(crate) mod tests_support {
+    use super::*;
+    use std::sync::Mutex;
+
+    use stitchd_core::experimentation::bandit::BanditConfig;
+    use stitchd_core::id::{EnvironmentId, MetricId};
+    use stitchd_core::metric::{
+        AggregationConfig, AggregationOperator, MetricDefinition, MetricKind,
+    };
+
+    use crate::scheduler::SequentialSettings;
+
+    /// A [`RunRecorder`] that captures every recorded row for inspection.
+    #[derive(Default)]
+    pub(crate) struct FakeRecorder {
+        actions: Mutex<Vec<String>>,
+    }
+
+    impl FakeRecorder {
+        /// Number of rows recorded.
+        pub(crate) fn count(&self) -> usize {
+            self.actions.lock().unwrap().len()
+        }
+        /// The most recently recorded action, if any.
+        pub(crate) fn last_action(&self) -> Option<String> {
+            self.actions.lock().unwrap().last().cloned()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl RunRecorder for FakeRecorder {
+        #[allow(clippy::too_many_arguments)]
+        async fn record(
+            &self,
+            _experiment_id: Uuid,
+            _iteration_id: Uuid,
+            action: &str,
+            _old: Option<Value>,
+            _new: Option<Value>,
+            _outcome: &str,
+            _detail: Option<String>,
+        ) -> Result<(), anyhow::Error> {
+            self.actions.lock().unwrap().push(action.to_string());
+            Ok(())
+        }
+    }
+
+    /// An [`AllocationApplier`] that counts calls and captures the last applied
+    /// allocation. Always returns APPLIED.
+    #[derive(Default)]
+    pub(crate) struct FakeApplier {
+        apply_calls: Mutex<u32>,
+        last_allocation: Mutex<Option<RolloutDistribution>>,
+    }
+
+    impl FakeApplier {
+        /// Number of static `apply` calls.
+        pub(crate) fn apply_calls(&self) -> u32 {
+            *self.apply_calls.lock().unwrap()
+        }
+        /// The last applied allocation, if any.
+        pub(crate) fn last_allocation(&self) -> Option<RolloutDistribution> {
+            self.last_allocation.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl AllocationApplier for FakeApplier {
+        async fn apply(
+            &self,
+            _experiment_id: Uuid,
+            allocation: &RolloutDistribution,
+        ) -> Result<ApplyResult, anyhow::Error> {
+            *self.apply_calls.lock().unwrap() += 1;
+            *self.last_allocation.lock().unwrap() = Some(allocation.clone());
+            Ok(ApplyResult::Applied {
+                resolved_target: "default_rule".into(),
+                new_version: 1,
+            })
+        }
+
+        async fn apply_realtime(
+            &self,
+            _experiment_id: Uuid,
+            _allocation: &RolloutDistribution,
+            _model: stitchd_proto::flags::v1::RealtimeBanditModel,
+        ) -> Result<ApplyResult, anyhow::Error> {
+            Ok(ApplyResult::Applied {
+                resolved_target: "rule".into(),
+                new_version: 1,
+            })
+        }
+    }
+
+    /// A [`CellReader`] returning fixed assignment counts + conversion successes
+    /// for one metric (count family). All other families return empty.
+    pub(crate) struct FakeReader {
+        counts: Vec<(String, u64)>,
+        successes: HashMap<String, u64>,
+    }
+
+    impl FakeReader {
+        /// Build from `(variant, n, conversions)` tuples for a count metric.
+        pub(crate) fn with_conversions(_metric_id: Uuid, arms: Vec<(&str, u64, u64)>) -> Self {
+            Self {
+                counts: arms.iter().map(|(k, n, _)| (k.to_string(), *n)).collect(),
+                successes: arms.iter().map(|(k, _, s)| (k.to_string(), *s)).collect(),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl CellReader for FakeReader {
+        async fn assignment_counts(
+            &self,
+            _e: Uuid,
+            _i: Uuid,
+            _env: Uuid,
+            _ctx: &str,
+            _end: DateTime<Utc>,
+        ) -> Result<Vec<(String, u64)>, anyhow::Error> {
+            Ok(self.counts.clone())
+        }
+        async fn aggregation_cells(
+            &self,
+            _cfg: &AggregationConfig,
+            _e: Uuid,
+            _i: Uuid,
+            _env: Uuid,
+            _ctx: &str,
+            _end: DateTime<Utc>,
+        ) -> Result<HashMap<String, AggCell>, anyhow::Error> {
+            Ok(self
+                .successes
+                .iter()
+                .map(|(k, s)| {
+                    (
+                        k.clone(),
+                        AggCell {
+                            event_n: 0,
+                            successes: *s,
+                            value_sum: 0.0,
+                            value_sq_sum: 0.0,
+                        },
+                    )
+                })
+                .collect())
+        }
+        async fn ratio_cells(
+            &self,
+            _n: &AggregationConfig,
+            _d: &AggregationConfig,
+            _e: Uuid,
+            _i: Uuid,
+            _env: Uuid,
+            _ctx: &str,
+            _end: DateTime<Utc>,
+        ) -> Result<HashMap<String, RatioGroupStats>, anyhow::Error> {
+            Ok(HashMap::new())
+        }
+        async fn funnel_cells(
+            &self,
+            _cfg: &stitchd_core::metric::FunnelConfig,
+            _e: Uuid,
+            _i: Uuid,
+            _env: Uuid,
+            _ctx: &str,
+            _end: DateTime<Utc>,
+        ) -> Result<HashMap<String, (u64, u64)>, anyhow::Error> {
+            Ok(HashMap::new())
+        }
+        async fn percentile_samples(
+            &self,
+            _cfg: &AggregationConfig,
+            _e: Uuid,
+            _i: Uuid,
+            _env: Uuid,
+            _ctx: &str,
+            _end: DateTime<Utc>,
+        ) -> Result<HashMap<String, Vec<f64>>, anyhow::Error> {
+            Ok(HashMap::new())
+        }
+        #[allow(clippy::too_many_arguments)]
+        async fn unit_values_with_pre(
+            &self,
+            _cfg: &AggregationConfig,
+            _e: Uuid,
+            _i: Uuid,
+            _env: Uuid,
+            _ctx: &str,
+            _end: DateTime<Utc>,
+            _ps: DateTime<Utc>,
+            _pe: DateTime<Utc>,
+        ) -> Result<Vec<(String, String, f64, f64)>, anyhow::Error> {
+            Ok(Vec::new())
+        }
+        #[allow(clippy::too_many_arguments)]
+        async fn contextual_reward_rows(
+            &self,
+            _cfg: &AggregationConfig,
+            _feature_param: &str,
+            _e: Uuid,
+            _i: Uuid,
+            _env: Uuid,
+            _ctx: &str,
+            _end: DateTime<Utc>,
+        ) -> Result<Vec<(String, String, f64)>, anyhow::Error> {
+            Ok(Vec::new())
+        }
+    }
+
+    /// A count-family [`MetricDefinition`] for tests.
+    pub(crate) fn count_metric(id: Uuid, env: Uuid) -> MetricDefinition {
+        let now = Utc::now();
+        MetricDefinition {
+            id: MetricId::from_uuid(id),
+            environment_id: EnvironmentId::from_uuid(env),
+            key: "conv".into(),
+            name: "conv".into(),
+            description: None,
+            kind: MetricKind::Aggregation(AggregationConfig {
+                event_key: "conv".into(),
+                aggregator: AggregationOperator::Count,
+                on_field: None,
+                where_clause: None,
+            }),
+            goal_direction: MetricGoal::Increase,
+            version: 1,
+            created_at: now,
+            updated_at: now,
+            deleted_at: None,
+        }
+    }
+
+    /// A running experiment with explicit env / variant_keys / metric_ids.
+    pub(crate) fn running_bandit_with(
+        config: Option<BanditConfig>,
+        mode: ExperimentMode,
+        env: Uuid,
+        variant_keys: Vec<String>,
+        metric_ids: Vec<Uuid>,
+    ) -> RunningExperiment {
+        RunningExperiment {
+            experiment_id: Uuid::new_v4(),
+            env_id: env,
+            iteration_id: Uuid::new_v4(),
+            metric_ids,
+            variant_keys,
+            started_at: Utc::now(),
+            unit_context_types: vec!["user".into()],
+            pre_period_days: 0,
+            sequential: SequentialSettings::default(),
+            variant_expected_bp: HashMap::new(),
+            experiment_mode: mode,
+            bandit_config: config,
         }
     }
 }
