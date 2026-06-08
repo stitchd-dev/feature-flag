@@ -16,7 +16,7 @@ use stitchd_proto::flags::v1::{
 };
 
 use crate::error::GatewayError;
-use crate::pagination::{PaginatedResponse, PaginationParams};
+use crate::pagination::{CursorPage, CursorParams};
 use crate::state::GatewayState;
 
 // ─── REST request / response types ───────────────────────────────────────────
@@ -53,7 +53,7 @@ pub struct ListFlagsQuery {
     #[serde(default)]
     pub include_archived: bool,
     #[serde(flatten)]
-    pub pagination: PaginationParams,
+    pub cursor: CursorParams,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -476,9 +476,13 @@ fn flag_to_admin_json(f: &FeatureFlag) -> AdminFlagJson {
     get,
     path = "/v1/projects/{project_id}/flags",
     tag = "flags",
-    params(("project_id" = String, Path, description = "Project / environment ID")),
+    params(
+        ("project_id" = String, Path, description = "Project / environment ID"),
+        ("cursor" = Option<String>, Query, description = "Opaque pagination cursor from a previous response"),
+        ("limit" = Option<u32>, Query, description = "Page size (default 50, max 200)"),
+    ),
     responses(
-        (status = 200, description = "Paginated list of flags"),
+        (status = 200, description = "Cursor-paginated list of flags"),
         (status = 401, description = "Unauthorized"),
         (status = 502, description = "Flag service unavailable"),
     ),
@@ -489,13 +493,17 @@ pub async fn list_flags(
     Path(project_id): Path<String>,
     Query(query): Query<ListFlagsQuery>,
 ) -> Result<impl IntoResponse, GatewayError> {
-    let pagination = &query.pagination;
+    let offset = query
+        .cursor
+        .offset()
+        .map_err(|_| GatewayError::BadRequest("invalid cursor".into()))?;
+    let limit = query.cursor.effective_limit();
     let req = tonic::Request::new(ListFlagsRequest {
         environment_id: String::new(),
         project_id,
         include_archived: query.include_archived,
-        page: pagination.effective_page(),
-        per_page: pagination.effective_per_page(),
+        page: (offset / u64::from(limit)) as u32 + 1,
+        per_page: limit,
     });
     let mut client = state.flag_client.lock().await;
     let inner = client
@@ -505,7 +513,7 @@ pub async fn list_flags(
         .into_inner();
     let items: Vec<AdminFlagJson> = inner.flags.iter().map(flag_to_admin_json).collect();
     let total = inner.total;
-    Ok(Json(PaginatedResponse::new(items, total, pagination)))
+    Ok(Json(CursorPage::from_offset(items, total, offset)))
 }
 
 /// `POST /v1/projects/{project_id}/flags`

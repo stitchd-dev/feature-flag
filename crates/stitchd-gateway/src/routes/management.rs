@@ -18,7 +18,7 @@ use stitchd_proto::management::v1::{
 };
 
 use crate::error::GatewayError;
-use crate::pagination::{PaginatedResponse, PaginationParams};
+use crate::pagination::{CursorPage, CursorParams};
 use crate::state::GatewayState;
 
 // ─── REST types ───────────────────────────────────────────────────────────────
@@ -285,7 +285,7 @@ pub struct ListSdkKeysJson {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct ListSdkKeysQuery {
     #[serde(flatten)]
-    pub pagination: PaginationParams,
+    pub cursor: CursorParams,
 }
 
 // ─── New handlers ─────────────────────────────────────────────────────────────
@@ -408,10 +408,15 @@ pub async fn list_sdk_keys(
     Path(environment_id): Path<String>,
     Query(query): Query<ListSdkKeysQuery>,
 ) -> Result<impl IntoResponse, GatewayError> {
+    let offset = query
+        .cursor
+        .offset()
+        .map_err(|_| GatewayError::BadRequest("invalid cursor".into()))?;
+    let limit = query.cursor.effective_limit();
     let req = tonic::Request::new(ListSdkKeysRequest {
         environment_id,
-        page: query.pagination.effective_page(),
-        per_page: query.pagination.effective_per_page(),
+        page: (offset / u64::from(limit)) as u32 + 1,
+        per_page: limit,
     });
     let mut client = state.management_client.lock().await;
     let resp = client
@@ -434,18 +439,14 @@ pub async fn list_sdk_keys(
             },
         })
         .collect();
-    Ok(Json(PaginatedResponse::new(
-        sdk_keys,
-        inner.total,
-        &query.pagination,
-    )))
+    Ok(Json(CursorPage::from_offset(sdk_keys, inner.total, offset)))
 }
 
 /// Query parameters for listing org users.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct ListOrgUsersQuery {
     #[serde(flatten)]
-    pub pagination: PaginationParams,
+    pub cursor: CursorParams,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -477,10 +478,15 @@ pub async fn list_org_users(
     Path(org_id): Path<String>,
     Query(query): Query<ListOrgUsersQuery>,
 ) -> Result<impl IntoResponse, GatewayError> {
+    let offset = query
+        .cursor
+        .offset()
+        .map_err(|_| GatewayError::BadRequest("invalid cursor".into()))?;
+    let limit = query.cursor.effective_limit();
     let req = tonic::Request::new(ListOrgUsersRequest {
         org_id,
-        page: query.pagination.effective_page(),
-        per_page: query.pagination.effective_per_page(),
+        page: (offset / u64::from(limit)) as u32 + 1,
+        per_page: limit,
     });
     let mut client = state.management_client.lock().await;
     let resp = client
@@ -499,11 +505,7 @@ pub async fn list_org_users(
             created_at: u.created_at,
         })
         .collect();
-    Ok(Json(PaginatedResponse::new(
-        users,
-        inner.total,
-        &query.pagination,
-    )))
+    Ok(Json(CursorPage::from_offset(users, inner.total, offset)))
 }
 
 /// `DELETE /v1/management/orgs/{org_id}/users/{user_id}`
