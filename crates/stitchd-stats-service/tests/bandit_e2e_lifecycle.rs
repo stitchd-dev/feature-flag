@@ -11,20 +11,17 @@
 //!   2. Run [`run_bandit_reallocation`] repeatedly and assert that the
 //!      allocation SHIFTS toward the winner across ticks (recorded as
 //!      `bandit_allocation_runs action='reallocate' outcome='applied'` rows).
-//!   3. Run [`run_bandit_lifecycle`] (AutoRollout) and assert that:
-//!      (a) convergence is detected and persisted
-//!          (`experiments.bandit_converged_variant` / `_prob` set to the
-//!          winner),
+//!   3. Run [`run_bandit_lifecycle`] (AutoRollout) and assert that: (a)
+//!      convergence is detected and persisted
+//!      (`experiments.bandit_converged_variant` / `_prob` set to the winner);
 //!      (b) the winner is COMMITTED (100% single-bucket distribution applied via
-//!          the privileged applier) and a `rollout` history row is recorded,
-//!      (c) the experiment is STOPPED (status → stopped), which by the
-//!          whole-flag lock model RELEASES the lock (no running/paused
-//!          experiment remains bound to the flag),
-//!      (d) the bound rule ends at the winner (the applier was handed the
-//!          single-bucket winner distribution).
-//!   4. Run the lifecycle once MORE and assert idempotency (already
-//!      committed + stopped → `StopOnly`, still rolled out, no duplicate
-//!      commit).
+//!      the privileged applier) and a `rollout` history row is recorded; (c) the
+//!      experiment is STOPPED (status → stopped), which by the whole-flag lock
+//!      model RELEASES the lock (no running/paused experiment remains bound to
+//!      the flag); (d) the bound rule ends at the winner (the applier was handed
+//!      the single-bucket winner distribution).
+//!   4. Run the lifecycle once MORE and assert idempotency (already committed +
+//!      stopped → `StopOnly`, still rolled out, no duplicate commit).
 //!
 //! The [`LifecycleTransitioner`] is implemented HERE with REAL Postgres writes
 //! (advisory `UPDATE experiments SET bandit_converged_variant…` exactly like the
