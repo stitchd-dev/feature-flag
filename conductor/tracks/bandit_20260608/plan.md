@@ -185,7 +185,7 @@ Phase-level wave summary:
       <!-- files: admin/src/pages/experiments/tabs/Interactions.tsx -->
 - [x] Task: Conductor - User Manual Verification 'Phase 12' [autonomous] (Protocol in workflow.md)
 
-## Phase 13: Integration, Docs & CI Hardening [checkpoint: pending]
+## Phase 13: Integration, Docs & CI Hardening [checkpoint: 277dbf1]
 <!-- execution: sequential -->
 <!-- depends: phase12 -->
 
