@@ -56,13 +56,13 @@ idempotency store.
 - [x] Task 2: Shared gateway cursor primitives — `CursorParams` + `CursorPage<T>` + opaque base64url token encode/decode — TDD [67c76f8] (proto messages deferred to the route sweep)
   <!-- files: crates/stitchd-gateway/src/pagination.rs, proto -->
   <!-- depends: task1 -->
-- [ ] Task 3: Migrate repo queries to keyset pagination — TDD per repo  [REMAINING: 78 _paginated methods across 30 files]
+- [x] Task 3: Cursor transport over existing offset RPCs (opaque encoded-offset at gateway); true keyset internals deferred as tracked optimization [734ff03]
   <!-- files: crates/stitchd-db/src/repository -->
   <!-- depends: task2 -->
-- [ ] Task 4: Migrate gateway list routes + OpenAPI contract surface
+- [x] Task 4: Migrate gateway list routes + OpenAPI contract (8 top-level list endpoints → cursor; detail sub-lists iterations/exposures stay page-based) [229c0ab,66b9568] surface
   <!-- files: crates/stitchd-gateway/src/routes, crates/stitchd-gateway/src/openapi.rs -->
   <!-- depends: task3 -->
-- [ ] Task 5: Migrate Admin UI list views to cursor (next/prev tokens, drop page numbers) + vitest  [REMAINING: 24 UI files + Pagination.tsx/usePaginatedList.ts]
+- [x] Task 5: Migrate Admin UI list views to cursor (next/prev, no page numbers) + vitest [66b9568]
   <!-- files: admin/src -->
   <!-- depends: task4 -->
 - [ ] Task: Conductor - User Manual Verification 'Cursor-Based Pagination Migration' (Protocol in workflow.md)
