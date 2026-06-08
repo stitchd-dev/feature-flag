@@ -3327,12 +3327,12 @@ mod ondemand_interaction_tests {
         ) -> Result<Vec<MetricDefinition>, RepositoryError> {
             unimplemented!()
         }
-        async fn list_by_environment_paginated(
+        async fn list_by_environment_keyset(
             &self,
             _environment_id: EnvironmentId,
-            _offset: u64,
+            _after: Option<stitchd_db::KeysetCursor>,
             _limit: u64,
-        ) -> Result<(Vec<MetricDefinition>, u64), RepositoryError> {
+        ) -> Result<(Vec<MetricDefinition>, Option<String>), RepositoryError> {
             unimplemented!()
         }
         async fn list_referencing_event(

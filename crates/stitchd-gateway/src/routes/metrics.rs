@@ -490,15 +490,10 @@ pub async fn list_metrics(
 ) -> Result<impl IntoResponse, GatewayError> {
     require_permission(&req, "metric:read")?;
 
-    let offset = query
-        .cursor
-        .offset()
-        .map_err(|_| GatewayError::BadRequest("invalid cursor".into()))?;
-    let limit = query.cursor.effective_limit();
     let rpc = tonic::Request::new(ListMetricsRequest {
         environment_id: query.env_id,
-        offset: Some(offset),
-        limit: Some(u64::from(limit)),
+        cursor: query.cursor.cursor.clone().unwrap_or_default(),
+        limit: query.cursor.effective_limit(),
         kind: query.kind,
         event_key: query.event_key,
     });
@@ -509,7 +504,7 @@ pub async fn list_metrics(
     for p in inner.items {
         items.push(proto_to_metric_json(p)?);
     }
-    Ok(Json(CursorPage::from_offset(items, inner.total, offset)))
+    Ok(Json(CursorPage::from_token(items, inner.next_cursor)))
 }
 
 /// `GET /v1/metrics/{id}` — fetch one metric.
@@ -1341,9 +1336,7 @@ mod tests {
         let m2 = sample_metric(env, Uuid::new_v4(), "m2");
         *mock.list.lock().await = Some(ListMetricsResponse {
             items: vec![m1, m2],
-            total: 5,
-            offset: 0,
-            limit: 2,
+            next_cursor: "next-page-token".to_string(),
         });
 
         let app = test_router(state);
@@ -1358,9 +1351,10 @@ mod tests {
 
         let captured = mock.captured.list.lock().await.clone().unwrap();
         assert_eq!(captured.environment_id, env.to_string());
-        // No cursor + limit=2 translates to offset=0, limit=2 for the gRPC call.
-        assert_eq!(captured.offset, Some(0));
-        assert_eq!(captured.limit, Some(2));
+        // No cursor + limit=2 translates to an empty cursor + limit=2 for the
+        // keyset gRPC call.
+        assert_eq!(captured.cursor, "");
+        assert_eq!(captured.limit, 2);
         assert_eq!(captured.kind.as_deref(), Some("aggregation"));
 
         let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
