@@ -220,7 +220,7 @@ jobs:
             --test aggregation_query --test ratio_query --test funnel_query \
             --test preview_query --test interaction_compute --test compute_pass \
             --test cuped_compute --test percentile_significance \
-            --test bandit_reallocation -- --ignored
+            --test bandit_reallocation --test bandit_contextual -- --ignored
 
       - name: Upload coverage to Codecov
         # Use the official `codecov/codecov-action` instead of the

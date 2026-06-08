@@ -504,6 +504,185 @@ pub fn decide_realtime_model(
     })
 }
 
+// ── Contextual model decision (pure) ─────────────────────────────────────────
+
+/// One assigned unit's contextual training row: its arm, its feature value
+/// (raw string from event properties, `""` when absent), and its reward.
+pub type ContextualRow = (String, String, f64);
+
+/// The pure decision for the CONTEXTUAL realtime path: from the experiment's
+/// contextual feature set + the per-unit `(variant, feature_value, reward)`
+/// training rows, fit a per-variant ridge linear model and assemble the
+/// snapshot-resident contextual [`RealtimeBanditModel`]. Or decide to skip.
+///
+/// All declared features are encoded as a SINGLE numeric passthrough each (the
+/// `ContextualConfig.features` carries only names; richer encodings are a future
+/// extension). The design vector is intercept-first, shared across variants. A
+/// variant with no rows fits to a zero vector (it simply predicts the intercept
+/// baseline = 0). Pure: the only work is `encode_features` + `fit_ridge`.
+///
+/// Skips when there are no features, no rows, or fewer than [`MIN_ARM_SAMPLE`]
+/// rows on the smallest-sampled arm (insufficient evidence — same floor as the
+/// non-contextual path).
+#[must_use]
+pub fn decide_contextual_model(
+    feature_names: &[String],
+    rows: &[ContextualRow],
+    goal: BanditGoal,
+    salt: &str,
+    unit_context_type: &str,
+) -> RealtimeModelDecision {
+    use stitchd_core::experimentation::bandit::contextual::{
+        ContextualModel, FeatureEncoding, FeatureSpec, VariantCoefficients, encode_features,
+        fit_design_inverse, fit_ridge,
+    };
+    use stitchd_proto::flags::v1::{
+        BanditGoalDirection as PG, RealtimeBanditModel as PModel, RewardFamily as PF,
+        feature_encoding::Kind as PKind,
+    };
+
+    if feature_names.is_empty() {
+        return RealtimeModelDecision::Skip("contextual model has no features".to_string());
+    }
+    if rows.is_empty() {
+        return RealtimeModelDecision::Skip("no contextual training rows".to_string());
+    }
+
+    // Build the feature specs: each declared name is a numeric passthrough on a
+    // parameter of the unit context type.
+    let specs: Vec<FeatureSpec> = feature_names
+        .iter()
+        .map(|name| FeatureSpec {
+            context_type: unit_context_type.to_string(),
+            parameter: name.clone(),
+            encoding: FeatureEncoding::Numeric,
+        })
+        .collect();
+
+    // Group rows by variant; build per-variant design rows. A resolver over a
+    // single (feature_value) row: for a single numeric feature this is the
+    // parameter value. With multiple features all sharing one row value we map
+    // the row's `feature_value` onto the FIRST feature and 0 for the rest — the
+    // CH query returns one feature column, so multi-feature contextual fits are
+    // a future extension; today the first declared feature carries the signal.
+    let mut by_variant: HashMap<String, Vec<(Vec<f64>, f64)>> = HashMap::new();
+    for (variant, feature_value, reward) in rows {
+        let resolver = SingleFeatureResolver {
+            context_type: unit_context_type,
+            parameter: &specs[0].parameter,
+            value: feature_value,
+        };
+        let fv = encode_features(&specs, &resolver);
+        by_variant
+            .entry(variant.clone())
+            .or_default()
+            .push((fv, *reward));
+    }
+
+    // Insufficient-evidence floor: the smallest-sampled arm must clear it.
+    let min_n = by_variant.values().map(Vec::len).min().unwrap_or(0) as u64;
+    if min_n < MIN_ARM_SAMPLE {
+        return RealtimeModelDecision::Skip(format!(
+            "insufficient contextual data: smallest arm n={min_n} < {MIN_ARM_SAMPLE}"
+        ));
+    }
+
+    // Ridge λ: a light penalty keeps the normal-equations solve well-conditioned
+    // without materially shrinking a real signal.
+    const RIDGE_LAMBDA: f64 = 1.0;
+    let mut variants: Vec<VariantCoefficients> = by_variant
+        .into_iter()
+        .map(|(variant_key, design)| {
+            let coeffs = fit_ridge(&design, RIDGE_LAMBDA);
+            let a_inv = fit_design_inverse(&design, RIDGE_LAMBDA);
+            VariantCoefficients {
+                variant_key,
+                coeffs,
+                a_inv,
+            }
+        })
+        .collect();
+    // Stable order so the model is deterministic across ticks.
+    variants.sort_by(|a, b| a.variant_key.cmp(&b.variant_key));
+
+    let cmodel = ContextualModel {
+        features: specs,
+        variants,
+    };
+
+    // Map the contextual model onto the proto via the same shape the flag-service
+    // mapping uses (here we build the proto directly to avoid a cross-crate dep).
+    let proto_features = cmodel
+        .features
+        .iter()
+        .map(|f| stitchd_proto::flags::v1::FeatureSpec {
+            context_type: f.context_type.clone(),
+            parameter: f.parameter.clone(),
+            encoding: Some(stitchd_proto::flags::v1::FeatureEncoding {
+                kind: Some(match &f.encoding {
+                    FeatureEncoding::Numeric => {
+                        PKind::Numeric(stitchd_proto::flags::v1::NumericEncoding {})
+                    }
+                    FeatureEncoding::OneHot { categories } => {
+                        PKind::OneHot(stitchd_proto::flags::v1::OneHotEncoding {
+                            categories: categories.clone(),
+                        })
+                    }
+                }),
+            }),
+        })
+        .collect();
+    let proto_variants = cmodel
+        .variants
+        .iter()
+        .map(|v| stitchd_proto::flags::v1::VariantCoefficients {
+            variant_key: v.variant_key.clone(),
+            coeffs: v.coeffs.clone(),
+            a_inv: v.a_inv.clone().unwrap_or_default(),
+        })
+        .collect();
+
+    let goal_pg = match goal {
+        BanditGoal::Increase => PG::Increase,
+        BanditGoal::Decrease => PG::Decrease,
+    };
+
+    RealtimeModelDecision::Refresh(PModel {
+        salt: salt.to_string(),
+        unit_context_type: unit_context_type.to_string(),
+        // Contextual models predict a continuous reward → Normal family wire tag
+        // (the engine reads `contextual` first, so the family is informational).
+        family: PF::Normal as i32,
+        goal: goal_pg as i32,
+        variants: vec![],
+        contextual: Some(stitchd_proto::flags::v1::ContextualModel {
+            features: proto_features,
+            variants: proto_variants,
+        }),
+    })
+}
+
+/// A [`FeatureResolver`](stitchd_core::experimentation::bandit::contextual::FeatureResolver)
+/// over a single `(context_type, parameter) → value` pair (one training row's
+/// feature value). Any other lookup misses (→ baseline / `0.0`).
+struct SingleFeatureResolver<'a> {
+    context_type: &'a str,
+    parameter: &'a str,
+    value: &'a str,
+}
+
+impl stitchd_core::experimentation::bandit::contextual::FeatureResolver
+    for SingleFeatureResolver<'_>
+{
+    fn resolve(&self, context_type: &str, parameter: &str) -> Option<&str> {
+        if context_type == self.context_type && parameter == self.parameter {
+            Some(self.value)
+        } else {
+            None
+        }
+    }
+}
+
 // ── I/O seams (thin traits) ──────────────────────────────────────────────────
 
 /// Result of applying an allocation via the privileged RPC.
@@ -1028,6 +1207,85 @@ fn even_split(variant_keys: &[String]) -> RolloutDistribution {
     RolloutDistribution { allocations }
 }
 
+/// Read per-unit contextual reward rows for the single scalar objective metric
+/// across the experiment's context types and decide the contextual model.
+///
+/// Skips (recoverable) when the objective is not a single `Aggregation`-backed
+/// scalar metric (the only family the per-unit reward query supports today).
+/// Propagates only a real ClickHouse read error.
+#[allow(clippy::too_many_arguments)]
+async fn decide_contextual_refresh(
+    reader: &dyn CellReader,
+    exp: &RunningExperiment,
+    config: &BanditConfig,
+    ctx_cfg: &stitchd_core::experimentation::bandit::ContextualConfig,
+    metrics: &HashMap<Uuid, MetricDefinition>,
+    iteration_end: DateTime<Utc>,
+    salt: &str,
+    unit_context_type: &str,
+) -> Result<RealtimeModelDecision, anyhow::Error> {
+    // Single scalar objective only; the per-unit reward query reads one metric.
+    let RewardObjective::Scalar { metric_id } = &config.objective else {
+        return Ok(RealtimeModelDecision::Skip(
+            "contextual realtime model currently supports a single scalar objective".to_string(),
+        ));
+    };
+    let Some(def) = metrics.get(metric_id) else {
+        return Ok(RealtimeModelDecision::Skip(
+            "objective metric definition not found".to_string(),
+        ));
+    };
+    let MetricKind::Aggregation(agg_cfg) = &def.kind else {
+        return Ok(RealtimeModelDecision::Skip(
+            "contextual realtime model currently supports an aggregation reward metric".to_string(),
+        ));
+    };
+    let Some(goal) = map_goal(def.goal_direction) else {
+        return Ok(RealtimeModelDecision::Skip(
+            "neutral objective metric has no optimisation direction".to_string(),
+        ));
+    };
+
+    // The first declared feature drives the per-unit reward query (the query
+    // returns one feature column); additional features ride the model spec but
+    // are encoded from the same single column today.
+    let Some(feature_param) = ctx_cfg.features.first() else {
+        return Ok(RealtimeModelDecision::Skip(
+            "contextual config declares no features".to_string(),
+        ));
+    };
+
+    let context_types: Vec<String> = if exp.unit_context_types.is_empty() {
+        vec![unit_context_type.to_string()]
+    } else {
+        exp.unit_context_types.clone()
+    };
+
+    let mut rows: Vec<ContextualRow> = Vec::new();
+    for ct in &context_types {
+        let part = reader
+            .contextual_reward_rows(
+                agg_cfg,
+                feature_param,
+                exp.experiment_id,
+                exp.iteration_id,
+                exp.env_id,
+                ct,
+                iteration_end,
+            )
+            .await?;
+        rows.extend(part);
+    }
+
+    Ok(decide_contextual_model(
+        &ctx_cfg.features,
+        &rows,
+        goal,
+        salt,
+        unit_context_type,
+    ))
+}
+
 /// Run the **realtime** snapshot-resident refresh for one bandit experiment.
 ///
 /// Reads the objective metric posteriors, builds the [`RealtimeBanditModel`] wire
@@ -1048,17 +1306,6 @@ async fn run_realtime_refresh(
         .as_ref()
         .expect("eligible realtime bandit has config");
 
-    // Resolve + read the objective metric posteriors (single scalar objective).
-    let mut metric_rewards: Vec<MetricRewards> = Vec::new();
-    for mid in objective_metric_ids(&config.objective) {
-        let Some(def) = metrics.get(&mid) else {
-            continue;
-        };
-        if let Some(mr) = build_metric_rewards(reader, exp, def, metrics, iteration_end).await? {
-            metric_rewards.push(mr);
-        }
-    }
-
     // The diversion unit + salt: the first configured unit context type, and the
     // experiment id as a stable per-experiment salt.
     let unit_context_type = exp
@@ -1068,7 +1315,37 @@ async fn run_realtime_refresh(
         .unwrap_or_else(|| "user".to_string());
     let salt = exp.experiment_id.to_string();
 
-    match decide_realtime_model(config, &metric_rewards, &salt, &unit_context_type) {
+    // CONTEXTUAL algorithm → fit a per-context linear model from per-unit reward
+    // rows; otherwise refresh the non-contextual posteriors. Both produce a
+    // RealtimeModelDecision that the shared apply/record path below handles.
+    let decision = if let BanditAlgorithm::Contextual(ctx_cfg) = &config.algorithm {
+        decide_contextual_refresh(
+            reader,
+            exp,
+            config,
+            ctx_cfg,
+            metrics,
+            iteration_end,
+            &salt,
+            &unit_context_type,
+        )
+        .await?
+    } else {
+        // Resolve + read the objective metric posteriors (single scalar objective).
+        let mut metric_rewards: Vec<MetricRewards> = Vec::new();
+        for mid in objective_metric_ids(&config.objective) {
+            let Some(def) = metrics.get(&mid) else {
+                continue;
+            };
+            if let Some(mr) = build_metric_rewards(reader, exp, def, metrics, iteration_end).await?
+            {
+                metric_rewards.push(mr);
+            }
+        }
+        decide_realtime_model(config, &metric_rewards, &salt, &unit_context_type)
+    };
+
+    match decision {
         RealtimeModelDecision::Skip(reason) => {
             recorder
                 .record(
@@ -1494,6 +1771,122 @@ mod tests {
         }
     }
 
+    // ── Contextual model fit (pure) ──────────────────────────────────────────
+
+    #[test]
+    fn decide_contextual_model_skips_without_features() {
+        let rows: Vec<ContextualRow> = vec![("a".into(), "1".into(), 1.0)];
+        match decide_contextual_model(&[], &rows, BanditGoal::Increase, "s", "user") {
+            RealtimeModelDecision::Skip(r) => assert!(r.contains("no features"), "{r}"),
+            other => panic!("expected skip, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decide_contextual_model_skips_on_insufficient_rows() {
+        // 2 rows per arm, below MIN_ARM_SAMPLE (30).
+        let mut rows: Vec<ContextualRow> = Vec::new();
+        for _ in 0..2 {
+            rows.push(("a".into(), "1".into(), 1.0));
+            rows.push(("b".into(), "1".into(), 1.0));
+        }
+        match decide_contextual_model(&["score".into()], &rows, BanditGoal::Increase, "s", "user") {
+            RealtimeModelDecision::Skip(r) => assert!(r.contains("insufficient"), "{r}"),
+            other => panic!("expected skip, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decide_contextual_model_fits_better_variant_per_feature() {
+        use stitchd_core::experimentation::bandit::contextual::sample_contextual_variant;
+        use stitchd_core::experimentation::bandit::{
+            ContextualModel, FeatureEncoding, FeatureSpec,
+        };
+
+        // Reward depends on the feature: variant "a" rewards HIGH score
+        // (reward = score), variant "b" rewards LOW score (reward = 10 - score).
+        // 60 rows per arm over scores 0..10 so the fit clears MIN_ARM_SAMPLE.
+        let mut rows: Vec<ContextualRow> = Vec::new();
+        for i in 0..60u32 {
+            let score = (i % 11) as f64; // 0..10
+            rows.push(("a".into(), score.to_string(), score));
+            rows.push(("b".into(), score.to_string(), 10.0 - score));
+        }
+
+        let decision = decide_contextual_model(
+            &["score".into()],
+            &rows,
+            BanditGoal::Increase,
+            "salt",
+            "user",
+        );
+        let RealtimeModelDecision::Refresh(model) = decision else {
+            panic!("expected a refreshed contextual model");
+        };
+        let proto_ctx = model.contextual.expect("contextual model on the wire");
+        // Map the proto contextual model back to the domain to sample from it.
+        let domain = ContextualModel {
+            features: proto_ctx
+                .features
+                .iter()
+                .map(|f| FeatureSpec {
+                    context_type: f.context_type.clone(),
+                    parameter: f.parameter.clone(),
+                    encoding: FeatureEncoding::Numeric,
+                })
+                .collect(),
+            variants: proto_ctx
+                .variants
+                .iter()
+                .map(|v| {
+                    stitchd_core::experimentation::bandit::VariantCoefficients {
+                        variant_key: v.variant_key.clone(),
+                        coeffs: v.coeffs.clone(),
+                        a_inv: None, // exploit the fitted means for the assertion
+                    }
+                })
+                .collect(),
+        };
+
+        // For HIGH score (10), "a" should win the majority; for LOW score (0),
+        // "b" should win the majority.
+        let mut a_high = 0;
+        let mut b_low = 0;
+        let n = 500u64;
+        for seed in 0..n {
+            if sample_contextual_variant(
+                &domain,
+                &[1.0, 10.0],
+                stitchd_core::rule_engine::types::BanditGoal::Increase,
+                seed,
+            )
+            .as_deref()
+                == Some("a")
+            {
+                a_high += 1;
+            }
+            if sample_contextual_variant(
+                &domain,
+                &[1.0, 0.0],
+                stitchd_core::rule_engine::types::BanditGoal::Increase,
+                seed,
+            )
+            .as_deref()
+                == Some("b")
+            {
+                b_low += 1;
+            }
+        }
+        assert!(
+            a_high as f64 / n as f64 > 0.9,
+            "a wins high score: {a_high}/{n}"
+        );
+        assert!(
+            b_low as f64 / n as f64 > 0.9,
+            "b wins low score: {b_low}/{n}"
+        );
+    }
+
     #[test]
     fn skips_when_floor_too_high() {
         // 2 arms × 6000 bp floor = 12000 > 10000 → normalize rejects.
@@ -1767,6 +2160,8 @@ mod tests {
     struct FakeReader {
         counts: Vec<(String, u64)>,
         successes: HashMap<String, u64>,
+        // Per-unit contextual reward rows the contextual fit reads.
+        contextual_rows: Vec<ContextualRow>,
     }
 
     #[async_trait::async_trait]
@@ -1854,6 +2249,19 @@ mod tests {
         ) -> Result<Vec<(String, String, f64, f64)>, anyhow::Error> {
             Ok(Vec::new())
         }
+        #[allow(clippy::too_many_arguments)]
+        async fn contextual_reward_rows(
+            &self,
+            _cfg: &AggregationConfig,
+            _feature_param: &str,
+            _e: Uuid,
+            _i: Uuid,
+            _env: Uuid,
+            _ctx: &str,
+            _end: DateTime<Utc>,
+        ) -> Result<Vec<(String, String, f64)>, anyhow::Error> {
+            Ok(self.contextual_rows.clone())
+        }
     }
 
     fn count_metric(id: Uuid, env: Uuid) -> MetricDefinition {
@@ -1883,6 +2291,7 @@ mod tests {
         let reader = FakeReader {
             counts: vec![],
             successes: HashMap::new(),
+            contextual_rows: vec![],
         };
         let applier = FakeApplier::new(ApplyResult::Applied {
             resolved_target: "x".into(),
@@ -1924,6 +2333,7 @@ mod tests {
         let reader = FakeReader {
             counts: vec![("control".into(), 1000), ("treatment".into(), 1000)],
             successes: HashMap::from([("control".into(), 100), ("treatment".into(), 300)]),
+            contextual_rows: vec![],
         };
         let applier = FakeApplier::new(ApplyResult::Applied {
             resolved_target: "default_rule".into(),
@@ -1978,6 +2388,7 @@ mod tests {
         let reader = FakeReader {
             counts: vec![("control".into(), 1000), ("treatment".into(), 5)],
             successes: HashMap::from([("control".into(), 100), ("treatment".into(), 1)]),
+            contextual_rows: vec![],
         };
         let applier = FakeApplier::new(ApplyResult::Applied {
             resolved_target: "x".into(),
@@ -2018,6 +2429,7 @@ mod tests {
         let reader = FakeReader {
             counts: vec![("control".into(), 1000), ("treatment".into(), 1000)],
             successes: HashMap::from([("control".into(), 100), ("treatment".into(), 300)]),
+            contextual_rows: vec![],
         };
         let applier = FakeApplier::new(ApplyResult::Failed {
             detail: "version conflict".into(),
@@ -2162,6 +2574,7 @@ mod tests {
         let reader = FakeReader {
             counts: vec![("control".into(), 1000), ("treatment".into(), 1000)],
             successes: HashMap::from([("control".into(), 100), ("treatment".into(), 300)]),
+            contextual_rows: vec![],
         };
         let applier = FakeApplier::new(ApplyResult::Applied {
             resolved_target: "rule-1".into(),
@@ -2219,6 +2632,7 @@ mod tests {
         let reader = FakeReader {
             counts: vec![("control".into(), 1000), ("treatment".into(), 1000)],
             successes: HashMap::from([("control".into(), 100), ("treatment".into(), 300)]),
+            contextual_rows: vec![],
         };
         let applier = FakeApplier::new(ApplyResult::Applied {
             resolved_target: "default_rule".into(),

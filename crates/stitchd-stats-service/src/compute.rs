@@ -97,8 +97,9 @@ use stitchd_core::metric::{
 use crate::dispatch::rewrite_placeholders_to_clickhouse;
 use crate::queries::QueryBind;
 use crate::queries::variant_stats::{
-    build_aggregation_cells_query, build_assignment_counts_query, build_funnel_cells_query,
-    build_percentile_samples_query, build_ratio_cells_query, build_unit_values_with_pre_query,
+    build_aggregation_cells_query, build_assignment_counts_query,
+    build_contextual_reward_rows_query, build_funnel_cells_query, build_percentile_samples_query,
+    build_ratio_cells_query, build_unit_values_with_pre_query,
 };
 use crate::results_writer::{MetricSummary, VariantPoint};
 use crate::scheduler::RunningExperiment;
@@ -160,6 +161,15 @@ const PERCENTILE_SAMPLE_CAP: u64 = 100_000;
 struct ChAssignmentCountRow {
     variant_key: String,
     n: u64,
+}
+
+/// Per-assigned-unit contextual reward row: the unit's arm, its feature value
+/// (from event properties; `""` when absent) and its post-exposure reward sum.
+#[derive(Debug, Clone, serde::Deserialize, clickhouse::Row)]
+struct ChContextualRewardRow {
+    variant_key: String,
+    feature_value: String,
+    reward: f64,
 }
 
 /// Per-**unit** CUPED row (single merged query — FIX B5): one assigned unit's
@@ -272,6 +282,24 @@ pub trait CellReader: Send + Sync {
         pre_start: DateTime<Utc>,
         pre_end: DateTime<Utc>,
     ) -> Result<Vec<(String, String, f64, f64)>, anyhow::Error>;
+
+    /// Per-assigned-unit contextual reward rows for the contextual-bandit fit.
+    /// Returns one `(variant_key, feature_value, reward)` per assigned unit in
+    /// `context_type`, where `feature_value` is `events.properties[feature_param]`
+    /// from the unit's post-exposure metric events (`""` when absent) and
+    /// `reward` is the post-exposure metric value sum (`0` for a non-firing unit,
+    /// ITT). See [`crate::queries::variant_stats::build_contextual_reward_rows_query`].
+    #[allow(clippy::too_many_arguments)]
+    async fn contextual_reward_rows(
+        &self,
+        cfg: &AggregationConfig,
+        feature_param: &str,
+        experiment_id: Uuid,
+        iteration_id: Uuid,
+        env_id: Uuid,
+        context_type: &str,
+        iteration_end: DateTime<Utc>,
+    ) -> Result<Vec<(String, String, f64)>, anyhow::Error>;
 }
 
 /// Aggregation cell: the event-side sufficient statistics for one variant
@@ -498,6 +526,35 @@ impl CellReader for ClickHouseCellReader {
         Ok(rows
             .into_iter()
             .map(|r| (r.context_key, r.variant_key, r.y, r.x_pre))
+            .collect())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn contextual_reward_rows(
+        &self,
+        cfg: &AggregationConfig,
+        feature_param: &str,
+        experiment_id: Uuid,
+        iteration_id: Uuid,
+        env_id: Uuid,
+        context_type: &str,
+        iteration_end: DateTime<Utc>,
+    ) -> Result<Vec<(String, String, f64)>, anyhow::Error> {
+        let built = build_contextual_reward_rows_query(
+            cfg,
+            feature_param,
+            &experiment_id.to_string(),
+            &iteration_id.to_string(),
+            &env_id.to_string(),
+            context_type,
+            iteration_end,
+        )?;
+        let rows = bind_query(&self.client, built.sql, built.binds)
+            .fetch_all::<ChContextualRewardRow>()
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.variant_key, r.feature_value, r.reward))
             .collect())
     }
 }
@@ -2881,6 +2938,19 @@ mod tests {
             _ps: DateTime<Utc>,
             _pe: DateTime<Utc>,
         ) -> Result<Vec<(String, String, f64, f64)>, anyhow::Error> {
+            Ok(Vec::new())
+        }
+        #[allow(clippy::too_many_arguments)]
+        async fn contextual_reward_rows(
+            &self,
+            _cfg: &AggregationConfig,
+            _feature_param: &str,
+            _e: Uuid,
+            _i: Uuid,
+            _v: Uuid,
+            _ct: &str,
+            _end: DateTime<Utc>,
+        ) -> Result<Vec<(String, String, f64)>, anyhow::Error> {
             Ok(Vec::new())
         }
     }
