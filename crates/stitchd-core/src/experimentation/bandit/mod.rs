@@ -9,12 +9,16 @@
 //! ([`BanditConfig`], [`BanditCampaignConfig`] and friends). Allocation /
 //! sampling logic lands in later phases.
 
+pub mod epsilon;
 pub mod thompson;
 pub mod types;
+pub mod ucb;
 
+pub use epsilon::epsilon_greedy_weights;
 pub use thompson::{BanditArm, GoalDirection, RewardPosterior, thompson_weights};
 pub use types::{
     BanditAlgorithm, BanditCampaignConfig, BanditConfig, BanditConfigError, BudgetCap,
     ConstraintDirection, ContextualConfig, ExperimentMode, GuardrailConstraint, LifecyclePolicy,
     ObjectiveWeight, PropagationMode, RewardObjective, VariantDiscoveryPolicy,
 };
+pub use ucb::ucb_weights;

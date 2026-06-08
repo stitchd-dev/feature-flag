@@ -91,6 +91,45 @@ impl RewardPosterior {
         (mean, (var / n).sqrt())
     }
 
+    /// The posterior **mean** reward for this arm — the point estimate used by
+    /// the index-based allocators (epsilon-greedy, UCB).
+    ///
+    /// * Beta-Binomial (conversion / funnel): `α / (α + β)`.
+    /// * Normal-Normal (numeric): the sample mean.
+    /// * Ratio: the delta-method point `R = num/den` (falls back to `num/den`
+    ///   when the group is too degenerate for a variance, else `0`).
+    pub fn mean(&self) -> f64 {
+        match self {
+            RewardPosterior::Conversion(stats) | RewardPosterior::Funnel(stats) => {
+                let (alpha, beta) = Self::beta_params(stats);
+                alpha / (alpha + beta)
+            }
+            RewardPosterior::Numeric(stats) => Self::numeric_params(stats).0,
+            RewardPosterior::Ratio(stats) => match stats.ratio_var() {
+                Some((r, _)) => r,
+                None => {
+                    if stats.den_sum > 0.0 {
+                        stats.num_sum / stats.den_sum
+                    } else {
+                        0.0
+                    }
+                }
+            },
+        }
+    }
+
+    /// The effective sample size `n` backing this arm's posterior — the number of
+    /// observations used by the UCB exploration bonus. Never negative.
+    pub fn arm_n(&self) -> u64 {
+        let n = match self {
+            RewardPosterior::Conversion(stats)
+            | RewardPosterior::Funnel(stats)
+            | RewardPosterior::Numeric(stats) => stats.sample_size,
+            RewardPosterior::Ratio(stats) => stats.n,
+        };
+        n.max(0) as u64
+    }
+
     /// Draw a single posterior sample for this arm, using `rng`.
     ///
     /// A degenerate arm (no signal) samples its point mean with zero spread so a
