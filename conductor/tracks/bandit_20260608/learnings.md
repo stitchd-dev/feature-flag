@@ -425,3 +425,64 @@ From `conductor/patterns.md` (read before starting):
   core 886 / flag-service 117 lib + 8 prereq-integration (with DATABASE_URL) / stats-service
   full suite pass; `bandit_contextual --ignored` green against live CH+PG; `cargo build
   -p stitchd-sdk-rust` confirms the contextual model flows to the SDK. No new crate deps.
+
+## Phase 7 — Autonomous Lifecycle (2026-06-08)
+
+### Task 7.1 — convergence detector (commit c25943b)
+- New pure module `stitchd-core/src/experimentation/bandit/convergence.rs`.
+  `probability_best` is a thin intent-named wrapper over `thompson_weights` (the
+  Thompson "raw weight" already IS P(arm is goal-directed best)) — convergence and
+  allocation share one definition. `detect_convergence(arms, goal, threshold, seed)
+  -> Option<ConvergedWinner{variant_key, prob}>` returns Some when the single
+  top-probability arm's prob-best >= threshold.
+- **Tie handling:** a genuine tie at the top (another arm shares the exact max
+  prob) returns None — no single arm dominates. Single/empty arm sets → None (a
+  one-armed bandit has nothing to converge against). `DEFAULT_CONVERGENCE_SAMPLES
+  = 4000` MC draws. 10 tests: golden-vector, clear-winner-converges,
+  tie-does-not-converge, decrease-goal, determinism.
+
+### Task 7.2 — lifecycle executor (commit fa074b3)
+- New `stats-service/src/lifecycle.rs`, run AFTER reallocation each tick in
+  main.rs (the reallocation's `BanditRunOutcome::Applied { allocation }` is captured
+  and passed in as `current_allocation` for the idempotency check).
+- **WHERE convergence/lifecycle state is persisted (for Phase 11):** NEW migration
+  `20260608000002_bandit_lifecycle.sql` adds nullable `bandit_converged_variant
+  TEXT` + `bandit_converged_prob DOUBLE PRECISION` on the `experiments` table.
+  Advisory, auto_commit AND auto_rollout all stamp it (via
+  `LifecycleTransitioner::record_convergence`, a runtime `UPDATE experiments SET ...`)
+  so the badge is readable regardless of policy. Apply to the verify DB with
+  `cargo sqlx migrate run --source crates/stitchd-db/migrations` before testing.
+- **Commit = single-bucket 100%-to-winner.** `RolloutDistribution::validate`
+  rejects 0bp, so commit writes `[{winner, 10000}]` (other arms OMITTED, i.e. 0%)
+  — a single full allocation is valid. Reuses the Phase-3 privileged
+  `AllocationApplier::apply` (ApplyBanditAllocation), NOT a new RPC.
+- **Auto_rollout = commit -> stop, lock released IMPLICITLY.** There is NO explicit
+  "promote winner / release lock" RPC. Stopping via `TransitionExperiment`
+  (proto `EXPERIMENT_STATUS_CONCLUDED` = core `Stopped`; the request has a
+  `reason` field — easy to miss → E0063) makes the experiment no longer the
+  flag's active experiment, so the flag-service's lock (derived from
+  `find_active_experiment_for_flag`) releases on its own, and the bound rule is
+  left at the committed 100%-winner. So "promote winner into standing rule +
+  release lock" = "commit on the bound rule, then stop". Documented as the
+  simplest model satisfying FR5.
+- **Idempotency:** pure `decide_lifecycle(policy, convergence, already_committed)`
+  → NoAction/RecordAdvisory/Commit/Rollout/StopOnly. `already_committed =
+  is_committed_to(current_allocation, winner)`. Once committed, AutoCommit →
+  NoAction (no re-commit row), AutoRollout → StopOnly (commit done, just stop).
+  Ordered commit→stop is restart-safe: a crash after commit re-runs next tick as
+  StopOnly. A stopped experiment is never listed again (scheduler lists only
+  running) → the ultimate idempotency backstop.
+- **Test-fakes refactor:** the inline `FakeApplier`/`FakeRecorder`/`FakeReader`/
+  `count_metric` in `bandit.rs`'s `mod tests` weren't reusable cross-module
+  (field-access API). Added a `#[cfg(test)] pub(crate) mod tests_support` in
+  bandit.rs with a RICHER API (`FakeApplier::apply_calls()`/`last_allocation()`,
+  `FakeRecorder::count()`/`last_action()`, `FakeReader::with_conversions(...)`,
+  `running_bandit_with(...)`) that lifecycle.rs imports. Left the original inline
+  fakes untouched (didn't rewrite the 12 existing bandit tests). Also added
+  `build_metric_rewards_pub` (pub(crate) wrapper) so lifecycle can build the same
+  objective posteriors for convergence.
+- 13 lifecycle tests (pure decision incl. policy × already-committed matrix; +
+  orchestration with fakes: advisory-no-traffic-change, commit-100%-no-stop,
+  commit-idempotent, rollout-commit-then-stop, rollout-stop-only-idempotent,
+  no-convergence-no-action, non-bandit-no-action). stats-service lib: 374 pass.
+- **No `.sqlx` delta** (record_convergence + recorder use runtime `sqlx::query`).
