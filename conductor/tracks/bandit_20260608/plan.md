@@ -71,11 +71,11 @@ Phase-level wave summary:
 <!-- execution: sequential -->
 <!-- depends: phase2, phase3 -->
 
-- [ ] Task 1: `bandit.rs` in stats-service — per-tick: read sufficient stats (reuse
+- [x] Task 1: `bandit.rs` in stats-service — per-tick: read sufficient stats (reuse [5c37034]
       `queries/variant_stats.rs`), compute weights (Phase 2), call allocation-write (Phase 3),
       record `bandit_allocation_runs`; skip on insufficient data / external lock; idempotent.
       <!-- files: crates/stitchd-stats-service/src/bandit.rs, crates/stitchd-stats-service/src/compute.rs -->
-- [ ] Task 2: Wire into `run_stats_compute` tick + `TriggerRecompute`; live-ClickHouse
+- [x] Task 2: Wire into `run_stats_compute` tick + `TriggerRecompute`; live-ClickHouse [20c0146]
       integration test (self-seeding) `tests/bandit_reallocation.rs`; **update CI live-CH
       `--test` list in ci.yml**.
       <!-- files: crates/stitchd-stats-service/src/compute.rs, crates/stitchd-stats-service/tests/bandit_reallocation.rs, .github/workflows/ci.yml -->
@@ -86,16 +86,16 @@ Phase-level wave summary:
 <!-- execution: sequential -->
 <!-- depends: phase2, phase3 -->
 
-- [ ] Task 1: Snapshot carries real-time bandit model params on the bound rule (mirrors
+- [x] Task 1: Snapshot carries real-time bandit model params on the bound rule (mirrors [c932949]
       `ExclusionGate`); proto/snapshot plumbing; SDK snapshot fetch covers it.
       <!-- files: crates/stitchd-core/src/evaluation/*, proto/flags/v1/flag_service.proto -->
-- [ ] Task 2: `evaluate_flag` bandit-aware sampling step — gated to realtime-mode rules,
+- [x] Task 2: `evaluate_flag` bandit-aware sampling step — gated to realtime-mode rules, [35ce501]
       zero-DB, deterministic under context-seeded RNG; identical in preview + Rust SDK;
       trace names variant + weights only (no privateParameters). Tests: invariant untouched
       for fixed/static rules; preview==SDK parity.
       <!-- files: crates/stitchd-core/src/evaluation/evaluate_flag.rs -->
       <!-- depends: task1 -->
-- [ ] Task 3: Stats-tick refreshes real-time model params in snapshot (instead of static %).
+- [x] Task 3: Stats-tick refreshes real-time model params in snapshot (instead of static %). [8c5782c]
       <!-- files: crates/stitchd-stats-service/src/bandit.rs -->
       <!-- depends: task2 -->
 - [x] Task: Conductor - User Manual Verification 'Phase 5' [autonomous] (Protocol in workflow.md)
@@ -104,10 +104,10 @@ Phase-level wave summary:
 <!-- execution: sequential -->
 <!-- depends: phase5 -->
 
-- [ ] Task 1: Per-context linear/logistic reward model (LinUCB / Thompson-on-linear) in
+- [x] Task 1: Per-context linear/logistic reward model (LinUCB / Thompson-on-linear) in [278cab9]
       stitchd-core; fit from sufficient stats over context features; golden-vector tests.
       <!-- files: crates/stitchd-core/src/experimentation/bandit/contextual.rs -->
-- [ ] Task 2: Model fit in stats-service tick → params onto snapshot; eval-time per-context
+- [x] Task 2: Model fit in stats-service tick → params onto snapshot; eval-time per-context [f0d13e6]
       sampling via Phase 5 path; live-CH integration test.
       <!-- files: crates/stitchd-stats-service/src/bandit.rs, crates/stitchd-stats-service/tests/bandit_contextual.rs, .github/workflows/ci.yml -->
       <!-- depends: task1 -->
@@ -150,7 +150,7 @@ Phase-level wave summary:
 <!-- execution: sequential -->
 <!-- depends: phase4 -->
 
-- [ ] Task 1: Time-varying-allocation correctness in interaction sweep + SRM (no spurious
+- [x] Task 1: Time-varying-allocation correctness in interaction sweep + SRM (no spurious [c7385ed]
       flags when a participant is a bandit); tests over shifting-allocation fixtures.
       <!-- files: crates/stitchd-stats-service/src/interaction_pairs.rs, crates/stitchd-stats-service/src/compute.rs -->
 - [x] Task 2: Generalize interaction order cap [a4b32cf] 3 → operator-bounded 4+; extend hierarchical
@@ -173,15 +173,15 @@ Phase-level wave summary:
 <!-- execution: parallel -->
 <!-- depends: phase11 -->
 
-- [ ] Task 1: Create/Edit form — mode picker, algorithm, propagation, lifecycle policy,
+- [x] Task 1: Create/Edit form — mode picker, algorithm, propagation, lifecycle policy, [a7bab43]
       campaign config, multi-objective weights/constraints; vitest.
       <!-- files: admin/src/pages/experiments/CreateExperimentModal.tsx -->
-- [ ] Task 2: Bandit Results view — live allocation-over-time chart, per-arm weights +
+- [x] Task 2: Bandit Results view — live allocation-over-time chart, per-arm weights + [ca4dbab]
       reward posteriors (per objective), convergence/commit badge, lifecycle + campaign
       timeline; vitest.
       <!-- files: admin/src/pages/experiments/tabs/Results.tsx, admin/src/pages/experiments/tabs/Bandit.tsx -->
       <!-- depends: task1 -->
-- [ ] Task 3: Interaction tab — order 4+ + bandit notes surfacing; vitest.
+- [x] Task 3: Interaction tab — order 4+ + bandit notes surfacing; vitest. [ffa5b1a]
       <!-- files: admin/src/pages/experiments/tabs/Interactions.tsx -->
 - [x] Task: Conductor - User Manual Verification 'Phase 12' [autonomous] (Protocol in workflow.md)
 
@@ -189,11 +189,11 @@ Phase-level wave summary:
 <!-- execution: sequential -->
 <!-- depends: phase12 -->
 
-- [ ] Task 1: End-to-end bandit lifecycle integration test (create→reallocate→converge→
+- [x] Task 1: End-to-end bandit lifecycle integration test (create→reallocate→converge→ [c84e227]
       rollout); contextual + campaign + multi-objective E2E; verify eval invariant intact for
       non-bandit flags.
       <!-- files: crates/stitchd-stats-service/tests/*, tests/e2e/* -->
-- [ ] Task 2: Docs — env vars, proto pages, crate READMEs, product.md status row; `cargo
+- [x] Task 2: Docs — env vars, proto pages, crate READMEs, product.md status row; `cargo [b86551e]
       xtask docs` idempotent; OpenAPI contract; final CI green sweep.
       <!-- files: docs/*, conductor/product.md, crates/*/README.md -->
       <!-- depends: task1 -->
