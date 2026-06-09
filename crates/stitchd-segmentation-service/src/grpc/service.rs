@@ -271,18 +271,14 @@ impl SegmentationService for SegmentationServiceImpl {
         let r = req.into_inner();
         let env_id = parse_env_id(&r.environment_id).map_err(Status::from)?;
 
-        let page = if r.page == 0 { 1u64 } else { u64::from(r.page) };
-        let per_page = if r.per_page == 0 {
-            50u64
-        } else {
-            u64::from(r.per_page).min(200)
-        };
-        let offset = (page - 1) * per_page;
+        let after = stitchd_db::KeysetCursor::decode_opt(Some(&r.cursor))
+            .map_err(|_| Status::invalid_argument("invalid cursor"))?;
+        let limit = u64::from(stitchd_db::effective_limit(r.limit, 50, 200));
 
-        let (segments, total) = self
+        let (segments, next_cursor) = self
             .state
             .segment_repo
-            .list_by_environment_paginated(env_id, offset, per_page)
+            .list_by_environment_keyset(env_id, after, limit)
             .await
             .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
 
@@ -310,7 +306,7 @@ impl SegmentationService for SegmentationServiceImpl {
         }
         Ok(Response::new(ListAdminSegmentsResponse {
             segments: admin_segments,
-            total,
+            next_cursor: next_cursor.unwrap_or_default(),
         }))
     }
 

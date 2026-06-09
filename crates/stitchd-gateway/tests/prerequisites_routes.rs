@@ -71,7 +71,7 @@ impl FlagService for MockFlagService {
     ) -> Result<Response<ListFlagsResponse>, Status> {
         Ok(Response::new(ListFlagsResponse {
             flags: vec![],
-            total: 0,
+            next_cursor: String::new(),
         }))
     }
     async fn mutate_flag(
@@ -324,7 +324,7 @@ async fn spawn_mock_invalid_argument(message: &str) -> FlagServiceClient<Channel
         ) -> Result<Response<ListFlagsResponse>, Status> {
             Ok(Response::new(ListFlagsResponse {
                 flags: vec![],
-                total: 0,
+                next_cursor: String::new(),
             }))
         }
         async fn mutate_flag(

@@ -344,47 +344,58 @@ impl FlagRepository for PgFlagRepository {
             .collect()
     }
 
-    async fn list_by_project_paginated(
+    async fn list_by_project_keyset(
         &self,
         project_id: ProjectId,
-        offset: u64,
+        after: Option<crate::KeysetCursor>,
         limit: u64,
-    ) -> Result<(Vec<FlagRecord>, u64), RepositoryError> {
-        // COUNT(*) OVER() gives the total row count alongside each result row,
-        // so we avoid a separate COUNT query.
+    ) -> Result<(Vec<FlagRecord>, Option<String>), RepositoryError> {
+        // Keyset pagination ordered by (created_at, id): fetch limit+1 rows; the
+        // surplus row signals a next page. The row-value comparison
+        // `(created_at, id) > ($cursor_created_at, $cursor_id)` resumes strictly
+        // after the prior page's last row. A NULL cursor (first page) admits all.
         #[allow(clippy::cast_possible_wrap)]
         let rows = sqlx::query(
             r"
             SELECT id, project_id, key, name, description, value_type, enabled,
                    default_variant_id, default_rule_distribution,
-                   created_at, updated_at, deleted_at, version,
-                   COUNT(*) OVER() AS total_count
+                   created_at, updated_at, deleted_at, version
             FROM feature_flags
             WHERE project_id = $1 AND deleted_at IS NULL
-            ORDER BY created_at
-            LIMIT $2 OFFSET $3
+              AND ($2::timestamptz IS NULL OR (created_at, id) > ($2, $3))
+            ORDER BY created_at, id
+            LIMIT $4
             ",
         )
         .bind(project_id.as_uuid())
-        .bind(limit as i64)
-        .bind(offset as i64)
+        .bind(after.map(|c| c.created_at))
+        .bind(after.map(|c| c.id))
+        .bind((limit + 1) as i64)
         .fetch_all(&self.pool)
         .await
         .map_err(RepositoryError::Database)?;
 
-        let total = rows.first().map_or(0, |r| {
-            let n: i64 = r.get("total_count");
-            #[allow(clippy::cast_sign_loss)]
-            let result = n.max(0) as u64;
-            result
-        });
-
-        let flags = rows
-            .into_iter()
-            .map(|row| assemble_flag_from_row(&row))
+        let mut flags = rows
+            .iter()
+            .map(assemble_flag_from_row)
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok((flags, total))
+        // limit+1 rows ⇒ more pages: drop the surplus and encode the new last
+        // row's keyset as the next cursor.
+        let next_cursor = if flags.len() as u64 > limit {
+            flags.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+            flags.last().map(|f| {
+                crate::KeysetCursor {
+                    created_at: f.created_at,
+                    id: f.id.as_uuid(),
+                }
+                .encode()
+            })
+        } else {
+            None
+        };
+
+        Ok((flags, next_cursor))
     }
 
     async fn list_by_project_all(

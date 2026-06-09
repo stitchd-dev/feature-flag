@@ -18,15 +18,16 @@ message ListFlagsRequest {
   bool   include_archived = 2;
   // Project-scoped admin reads set this instead of environment_id.
   string project_id      = 3;
-  // Pagination: 0 means "use server default" (page=1, per_page=50).
-  uint32 page     = 4;
-  uint32 per_page = 5;
+  // Cursor (keyset) pagination — the admin (project-scoped) path. An empty
+  // cursor is the first page; `limit` defaults to 50, capped at 200.
+  string cursor   = 4;
+  uint32 limit    = 5;
 }
 
 message ListFlagsResponse {
   repeated FeatureFlag flags = 1;
-  // Total number of flags across all pages (set when page > 0).
-  uint64 total = 2;
+  // Opaque cursor for the next page; empty when there are no more rows.
+  string next_cursor = 2;
 }
 
 // ─── Mutation ─────────────────────────────────────────────────────────────────

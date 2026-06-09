@@ -100,7 +100,7 @@ impl FlagService for LockedFlagService {
     ) -> Result<Response<ListFlagsResponse>, Status> {
         Ok(Response::new(ListFlagsResponse {
             flags: vec![],
-            total: 0,
+            next_cursor: String::new(),
         }))
     }
 
@@ -351,7 +351,7 @@ impl FlagService for UnlockedFlagService {
     ) -> Result<Response<ListFlagsResponse>, Status> {
         Ok(Response::new(ListFlagsResponse {
             flags: vec![],
-            total: 0,
+            next_cursor: String::new(),
         }))
     }
     async fn mutate_flag(
@@ -556,7 +556,7 @@ impl FlagService for InvalidDistFlagService {
     ) -> Result<Response<ListFlagsResponse>, Status> {
         Ok(Response::new(ListFlagsResponse {
             flags: vec![],
-            total: 0,
+            next_cursor: String::new(),
         }))
     }
     async fn mutate_flag(

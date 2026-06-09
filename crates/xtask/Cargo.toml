@@ -17,6 +17,11 @@ stitchd-db = { path = "../stitchd-db" }
 # pulling `calculate_allocation` from stitchd-core. serde_json reads the
 # fixture file.
 stitchd-core = { path = "../stitchd-core" }
+# `ch-migrate` subcommand (feature-flag-7rp / reset_dev_db.sh --all) applies the
+# canonical ClickHouse migration set via the event-writer migrator against a
+# client built from STITCHD_CLICKHOUSE_* env vars.
+stitchd-event-writer = { path = "../stitchd-event-writer" }
+clickhouse = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

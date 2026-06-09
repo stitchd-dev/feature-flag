@@ -185,13 +185,14 @@ mod tests {
             Ok(vec![])
         }
 
-        async fn list_org_users_paginated(
+        async fn list_org_users_keyset(
             &self,
             _org_id: stitchd_core::id::OrganisationId,
-            _offset: u64,
+            _after: Option<stitchd_db::EmailKeysetCursor>,
             _limit: u64,
-        ) -> Result<(Vec<(User, stitchd_core::auth::OrgRole)>, u64), RepositoryError> {
-            Ok((vec![], 0))
+        ) -> Result<(Vec<(User, stitchd_core::auth::OrgRole)>, Option<String>), RepositoryError>
+        {
+            Ok((vec![], None))
         }
     }
 

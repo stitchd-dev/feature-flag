@@ -451,6 +451,10 @@ async fn main() -> anyhow::Result<()> {
     // ── Timeseries reader (Phase 7 Task 3) ────────────────────────────────────
     use stitchd_stats_service::timeseries_reader::ClickHouseTimeseriesReader;
     let recomputer_metric_repo = metric_repo.clone();
+    // Clone before `experiment_repo` is moved into the timeseries reader — the
+    // on-demand recomputer needs it to scope the interaction sweep to the
+    // target's environment (feature-flag-uga).
+    let recomputer_experiment_repo = experiment_repo.clone();
     let timeseries_reader = Arc::new(ClickHouseTimeseriesReader::new(
         Arc::new(ch_client.clone()),
         metric_repo,
@@ -465,6 +469,7 @@ async fn main() -> anyhow::Result<()> {
             exp_client.clone(),
             Arc::new(ch_client.clone()),
             recomputer_metric_repo,
+            recomputer_experiment_repo,
             pg_pool.clone(),
         ));
 

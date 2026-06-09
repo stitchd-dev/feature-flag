@@ -18,7 +18,7 @@ use stitchd_proto::management::v1::{
 };
 
 use crate::error::GatewayError;
-use crate::pagination::{PaginatedResponse, PaginationParams};
+use crate::pagination::{CursorPage, CursorParams};
 use crate::state::GatewayState;
 
 // ─── REST types ───────────────────────────────────────────────────────────────
@@ -285,7 +285,7 @@ pub struct ListSdkKeysJson {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct ListSdkKeysQuery {
     #[serde(flatten)]
-    pub pagination: PaginationParams,
+    pub cursor: CursorParams,
 }
 
 // ─── New handlers ─────────────────────────────────────────────────────────────
@@ -410,8 +410,8 @@ pub async fn list_sdk_keys(
 ) -> Result<impl IntoResponse, GatewayError> {
     let req = tonic::Request::new(ListSdkKeysRequest {
         environment_id,
-        page: query.pagination.effective_page(),
-        per_page: query.pagination.effective_per_page(),
+        cursor: query.cursor.cursor.clone().unwrap_or_default(),
+        limit: query.cursor.effective_limit(),
     });
     let mut client = state.management_client.lock().await;
     let resp = client
@@ -434,18 +434,14 @@ pub async fn list_sdk_keys(
             },
         })
         .collect();
-    Ok(Json(PaginatedResponse::new(
-        sdk_keys,
-        inner.total,
-        &query.pagination,
-    )))
+    Ok(Json(CursorPage::from_token(sdk_keys, inner.next_cursor)))
 }
 
 /// Query parameters for listing org users.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct ListOrgUsersQuery {
     #[serde(flatten)]
-    pub pagination: PaginationParams,
+    pub cursor: CursorParams,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -479,8 +475,8 @@ pub async fn list_org_users(
 ) -> Result<impl IntoResponse, GatewayError> {
     let req = tonic::Request::new(ListOrgUsersRequest {
         org_id,
-        page: query.pagination.effective_page(),
-        per_page: query.pagination.effective_per_page(),
+        cursor: query.cursor.cursor.clone().unwrap_or_default(),
+        limit: query.cursor.effective_limit(),
     });
     let mut client = state.management_client.lock().await;
     let resp = client
@@ -499,11 +495,7 @@ pub async fn list_org_users(
             created_at: u.created_at,
         })
         .collect();
-    Ok(Json(PaginatedResponse::new(
-        users,
-        inner.total,
-        &query.pagination,
-    )))
+    Ok(Json(CursorPage::from_token(users, inner.next_cursor)))
 }
 
 /// `DELETE /v1/management/orgs/{org_id}/users/{user_id}`

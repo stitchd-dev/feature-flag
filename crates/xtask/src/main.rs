@@ -16,6 +16,7 @@ fn main() -> Result<()> {
     match task.as_deref() {
         Some("docs") => docs(),
         Some("scylla-migrate") => scylla_migrate(),
+        Some("ch-migrate") => ch_migrate(),
         _ => {
             eprintln!("Usage: cargo xtask <task>");
             eprintln!();
@@ -24,9 +25,48 @@ fn main() -> Result<()> {
                 "  docs                  Regenerate all documentation and build the mdBook site"
             );
             eprintln!("  scylla-migrate        Apply pending ScyllaDB CQL migrations");
+            eprintln!("  ch-migrate            Apply ClickHouse migrations (event-writer set)");
             std::process::exit(1);
         }
     }
+}
+
+/// Apply the canonical ClickHouse migration set via the event-writer migrator.
+///
+/// Builds a [`clickhouse::Client`] from the same `STITCHD_CLICKHOUSE_*` env vars
+/// the analytics/stats services read, then delegates to
+/// [`stitchd_event_writer::migrations::run`] — the single source of truth for CH
+/// DDL ordering. Used by `scripts/reset_dev_db.sh --all` to bring a freshly
+/// dropped ClickHouse database up to the current schema (feature-flag-7rp).
+fn ch_migrate() -> Result<()> {
+    let url =
+        std::env::var("STITCHD_CLICKHOUSE_URL").unwrap_or_else(|_| "http://localhost:8123".into());
+    let db = std::env::var("STITCHD_CLICKHOUSE_DB").unwrap_or_else(|_| "stitchd".into());
+    let user = std::env::var("STITCHD_CLICKHOUSE_USER").ok();
+    let password = std::env::var("STITCHD_CLICKHOUSE_PASSWORD").ok();
+
+    println!("Connecting to ClickHouse at {url} (database: {db})");
+    let mut client = clickhouse::Client::default()
+        .with_url(&url)
+        .with_database(&db);
+    if let Some(u) = &user {
+        client = client.with_user(u);
+    }
+    if let Some(p) = &password {
+        client = client.with_password(p);
+    }
+
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to build tokio runtime")?
+        .block_on(async {
+            stitchd_event_writer::migrations::run(&client)
+                .await
+                .context("ClickHouse migration failed")?;
+            println!("✓ ClickHouse migrations applied successfully");
+            Ok(())
+        })
 }
 
 fn scylla_migrate() -> Result<()> {

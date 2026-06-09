@@ -2,7 +2,7 @@ import axios from 'axios'
 import { auth } from './auth'
 import type {
   AdminFlagResponse,
-  PaginatedResponse,
+  CursorPage,
   Segment,
   CreateSegmentRequest,
   UpdateSegmentRequest,
@@ -380,14 +380,14 @@ export async function getSamlSpMetadata(orgId: string, authProviderId: string): 
 
 export async function listFlags(
   projectId: string,
-  params?: { page?: number; per_page?: number; include_archived?: boolean },
+  params?: { cursor?: string | null; limit?: number; include_archived?: boolean },
   signal?: AbortSignal,
-): Promise<PaginatedResponse<AdminFlagResponse>> {
+): Promise<CursorPage<AdminFlagResponse>> {
   const qs = new URLSearchParams()
-  if (params?.page != null) qs.set('page', String(params.page))
-  if (params?.per_page != null) qs.set('per_page', String(params.per_page))
+  if (params?.cursor != null) qs.set('cursor', params.cursor)
+  if (params?.limit != null) qs.set('limit', String(params.limit))
   if (params?.include_archived) qs.set('include_archived', 'true')
-  const { data } = await api.get<PaginatedResponse<AdminFlagResponse>>(
+  const { data } = await api.get<CursorPage<AdminFlagResponse>>(
     `/v1/projects/${projectId}/flags?${qs}`,
     { signal },
   )
@@ -491,13 +491,13 @@ export async function getEvalStats(
 
 export async function listSegments(
   environmentId: string,
-  params?: { page?: number; per_page?: number },
+  params?: { cursor?: string | null; limit?: number },
   signal?: AbortSignal,
-): Promise<PaginatedResponse<Segment>> {
+): Promise<CursorPage<Segment>> {
   const qs = new URLSearchParams({ env_id: environmentId })
-  if (params?.page != null) qs.set('page', String(params.page))
-  if (params?.per_page != null) qs.set('per_page', String(params.per_page))
-  const { data } = await api.get<PaginatedResponse<Segment>>(
+  if (params?.cursor != null) qs.set('cursor', params.cursor)
+  if (params?.limit != null) qs.set('limit', String(params.limit))
+  const { data } = await api.get<CursorPage<Segment>>(
     `/v1/segments?${qs}`,
     { signal },
   )
@@ -765,7 +765,12 @@ export async function listExperimentIterations(
   if (params?.page != null) qs.set('page', String(params.page))
   if (params?.per_page != null) qs.set('per_page', String(params.per_page))
   const suffix = qs.toString() ? `?${qs}` : ''
-  const { data } = await api.get<PaginatedResponse<IterationJsonRow>>(
+  const { data } = await api.get<{
+    items: IterationJsonRow[]
+    total: number
+    page: number
+    per_page: number
+  }>(
     `/v1/environments/${environmentId}/experiments/${experimentKey}/iterations${suffix}`,
     { signal },
   )

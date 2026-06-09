@@ -68,15 +68,19 @@ pub trait AuthUserRepository: Send + Sync {
         org_id: OrganisationId,
     ) -> Result<Vec<(User, OrgRole)>, RepositoryError>;
 
-    /// List users in an org with offset pagination.
+    /// List users in an org with **keyset** (cursor) pagination, ordered by
+    /// `(email, id)` — preserving the list's alphabetical-by-email order (email
+    /// is globally unique, so it is a stable keyset).
     ///
-    /// Returns `(page_items, total_count)`.
-    async fn list_org_users_paginated(
+    /// `after` is the keyset position from a prior page (`None` for the first
+    /// page). Returns `(page_items, next_cursor)` where `next_cursor` is the
+    /// opaque token for the following page, or `None` on the last page.
+    async fn list_org_users_keyset(
         &self,
         org_id: OrganisationId,
-        offset: u64,
+        after: Option<crate::EmailKeysetCursor>,
         limit: u64,
-    ) -> Result<(Vec<(User, OrgRole)>, u64), RepositoryError>;
+    ) -> Result<(Vec<(User, OrgRole)>, Option<String>), RepositoryError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -394,52 +398,44 @@ impl AuthUserRepository for PgAuthUserRepository {
             .collect()
     }
 
-    async fn list_org_users_paginated(
+    async fn list_org_users_keyset(
         &self,
         org_id: OrganisationId,
-        offset: u64,
+        after: Option<crate::EmailKeysetCursor>,
         limit: u64,
-    ) -> Result<(Vec<(User, OrgRole)>, u64), RepositoryError> {
+    ) -> Result<(Vec<(User, OrgRole)>, Option<String>), RepositoryError> {
         use sqlx::Row as _;
 
+        // Keyset pagination ordered by (email, id): fetch limit+1 rows; the
+        // surplus row signals a next page. The row-value comparison
+        // `(email, id) > ($cursor_email, $cursor_id)` resumes strictly after the
+        // prior page's last row. A NULL cursor (first page) admits all. Ordered
+        // by email to keep the list alphabetical (email is globally unique).
+        #[allow(clippy::cast_possible_wrap)]
         let rows = sqlx::query(
             r"
             SELECT
                 u.id, u.email, u.display_name, u.avatar_url, u.password_hash,
                 u.token_secret, u.totp_secret, u.totp_enabled, u.status,
                 u.created_at, u.updated_at,
-                m.role AS org_role,
-                COUNT(*) OVER() AS total_count
+                m.role AS org_role
             FROM users u
             JOIN org_memberships m ON u.id = m.user_id
             WHERE m.org_id = $1
-            ORDER BY u.email
-            LIMIT $2 OFFSET $3
+              AND ($2::text IS NULL OR (u.email, u.id) > ($2, $3))
+            ORDER BY u.email, u.id
+            LIMIT $4
             ",
         )
         .bind(org_id.as_uuid())
-        .bind({
-            #[allow(clippy::cast_possible_wrap)]
-            let v = limit as i64;
-            v
-        })
-        .bind({
-            #[allow(clippy::cast_possible_wrap)]
-            let v = offset as i64;
-            v
-        })
+        .bind(after.as_ref().map(|c| c.email.clone()))
+        .bind(after.as_ref().map(|c| c.id))
+        .bind((limit + 1) as i64)
         .fetch_all(&self.pool)
         .await
         .map_err(RepositoryError::Database)?;
 
-        let total = rows.first().map_or(0, |r| {
-            let n: i64 = r.get("total_count");
-            #[allow(clippy::cast_sign_loss)]
-            let result = n.max(0) as u64;
-            result
-        });
-
-        let users = rows
+        let mut users = rows
             .iter()
             .map(|r| {
                 let org_role_str: &str = r.get("org_role");
@@ -465,7 +461,22 @@ impl AuthUserRepository for PgAuthUserRepository {
             })
             .collect::<Result<Vec<_>, RepositoryError>>()?;
 
-        Ok((users, total))
+        // limit+1 rows ⇒ more pages: drop the surplus and encode the new last
+        // row's keyset as the next cursor.
+        let next_cursor = if users.len() as u64 > limit {
+            users.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+            users.last().map(|(u, _)| {
+                crate::EmailKeysetCursor {
+                    email: u.email.clone(),
+                    id: u.id.as_uuid(),
+                }
+                .encode()
+            })
+        } else {
+            None
+        };
+
+        Ok((users, next_cursor))
     }
 }
 
@@ -709,5 +720,104 @@ mod tests {
         let org_id = seed_org(&pool).await;
         let members = repo.list_org_users(org_id).await.unwrap();
         assert!(members.is_empty());
+    }
+
+    // ── Keyset (cursor) org-user list tests ─────────────────────────────────────
+
+    /// Seed `n` members in `org_id` and return them (creation order).
+    async fn seed_org_members(
+        repo: &PgAuthUserRepository,
+        pool: &PgPool,
+        org_id: stitchd_core::id::OrganisationId,
+        n: usize,
+    ) {
+        for i in 0..n {
+            let user = repo
+                .create(
+                    &format!("member-{i:03}@example.com"),
+                    &format!("M{i}"),
+                    None,
+                )
+                .await
+                .unwrap();
+            sqlx::query!(
+                "INSERT INTO org_memberships (user_id, org_id, role) VALUES ($1, $2, 'org_member')",
+                user.id.as_uuid(),
+                org_id.as_uuid(),
+            )
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn list_org_users_keyset_first_page_and_next_cursor(pool: PgPool) {
+        let repo = PgAuthUserRepository::new(pool.clone());
+        let org_id = seed_org(&pool).await;
+        seed_org_members(&repo, &pool, org_id, 5).await;
+
+        let (page, next) = repo.list_org_users_keyset(org_id, None, 3).await.unwrap();
+        assert_eq!(page.len(), 3, "first page returns limit items");
+        assert!(next.is_some(), "more rows remain ⇒ a next cursor");
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn list_org_users_keyset_last_page_has_no_cursor(pool: PgPool) {
+        let repo = PgAuthUserRepository::new(pool.clone());
+        let org_id = seed_org(&pool).await;
+        seed_org_members(&repo, &pool, org_id, 2).await;
+
+        let (page, next) = repo.list_org_users_keyset(org_id, None, 50).await.unwrap();
+        assert_eq!(page.len(), 2);
+        assert!(next.is_none(), "all rows on one page ⇒ no next cursor");
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn list_org_users_keyset_empty_returns_no_cursor(pool: PgPool) {
+        let repo = PgAuthUserRepository::new(pool.clone());
+        let org_id = seed_org(&pool).await;
+        let (items, next) = repo.list_org_users_keyset(org_id, None, 50).await.unwrap();
+        assert!(items.is_empty());
+        assert!(next.is_none());
+    }
+
+    /// Rigorous correctness: paging through with the returned cursor visits EVERY
+    /// row exactly once, in `(email, id)` order, with no duplicates or gaps.
+    #[sqlx::test(migrations = "./migrations")]
+    async fn list_org_users_keyset_pages_through_all_rows_exactly_once(pool: PgPool) {
+        const N: usize = 23;
+        let repo = PgAuthUserRepository::new(pool.clone());
+        let org_id = seed_org(&pool).await;
+        seed_org_members(&repo, &pool, org_id, N).await;
+
+        // Walk pages of 7 (so the last page is partial: 23 = 7+7+7+2).
+        let mut seen: Vec<uuid::Uuid> = Vec::new();
+        let mut cursor: Option<crate::EmailKeysetCursor> = None;
+        let mut pages = 0;
+        loop {
+            let (items, next) = repo.list_org_users_keyset(org_id, cursor, 7).await.unwrap();
+            pages += 1;
+            assert!(items.len() <= 7, "never more than the limit per page");
+            for (u, _) in &items {
+                seen.push(u.id.as_uuid());
+            }
+            match next {
+                Some(tok) => cursor = Some(crate::EmailKeysetCursor::decode(&tok).unwrap()),
+                None => break,
+            }
+            assert!(pages <= N + 1, "must terminate");
+        }
+
+        assert_eq!(
+            seen.len(),
+            N,
+            "every row visited exactly once — no gaps/dupes"
+        );
+        let mut unique = seen.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), N, "no duplicates across pages");
+        assert_eq!(pages, 4, "23 rows / 7 per page = 4 pages (7+7+7+2)");
     }
 }

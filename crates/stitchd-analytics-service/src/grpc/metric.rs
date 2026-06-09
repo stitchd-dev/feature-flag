@@ -57,11 +57,6 @@ use stitchd_stats_service::{
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Default page size when `ListMetricsRequest.limit` is unset/zero.
-const DEFAULT_LIST_LIMIT: u64 = 50;
-/// Hard cap on page size (matches proto doc).
-const MAX_LIST_LIMIT: u64 = 200;
-
 // ---------------------------------------------------------------------------
 // Proto ↔ domain conversion helpers
 // ---------------------------------------------------------------------------
@@ -385,11 +380,9 @@ pub async fn handle_list_metrics(
     let req = request.into_inner();
     let env_id = parse_environment_id(&req.environment_id, "environment_id")?;
 
-    let offset = req.offset.unwrap_or(0);
-    let limit = match req.limit.unwrap_or(DEFAULT_LIST_LIMIT) {
-        0 => DEFAULT_LIST_LIMIT,
-        n => n.min(MAX_LIST_LIMIT),
-    };
+    let after = stitchd_db::KeysetCursor::decode_opt(Some(&req.cursor))
+        .map_err(|_| Status::invalid_argument("invalid cursor"))?;
+    let limit = u64::from(stitchd_db::effective_limit(req.limit, 50, 200));
 
     let kind_filter = req.kind.as_deref().filter(|s| !s.is_empty());
     let event_key_filter = req.event_key.as_deref().filter(|s| !s.is_empty());
@@ -398,7 +391,7 @@ pub async fn handle_list_metrics(
     // serve the bounded result set from the dedicated repo method. The
     // EventDetail back-link UI surfaces ALL referencing metrics in one
     // section and never paginates them. `kind` filter still applies on
-    // top of the result in case a caller combines both.
+    // top of the result in case a caller combines both. No cursor here.
     if let Some(ek) = event_key_filter {
         let rows = repo
             .list_referencing_event(env_id, ek)
@@ -409,17 +402,14 @@ pub async fn handle_list_metrics(
             .filter(|m| kind_filter.is_none_or(|k| m.kind.tag() == k))
             .map(|m| domain_to_proto(&m))
             .collect();
-        let total = items.len() as u64;
         return Ok(Response::new(ListMetricsResponse {
             items,
-            total,
-            offset: 0,
-            limit: total,
+            next_cursor: String::new(),
         }));
     }
 
-    let (rows, total) = repo
-        .list_by_environment_paginated(env_id, offset, limit)
+    let (rows, next_cursor) = repo
+        .list_by_environment_keyset(env_id, after, limit)
         .await
         .map_err(|e| repo_err_to_status(e, "list_metrics"))?;
 
@@ -431,9 +421,7 @@ pub async fn handle_list_metrics(
 
     Ok(Response::new(ListMetricsResponse {
         items,
-        total,
-        offset,
-        limit,
+        next_cursor: next_cursor.unwrap_or_default(),
     }))
 }
 
@@ -1118,16 +1106,17 @@ mod handler_tests {
 
         let req = Request::new(ListMetricsRequest {
             environment_id: env.to_string(),
-            offset: Some(0),
-            limit: Some(2),
+            cursor: String::new(),
+            limit: 2,
             kind: None,
             event_key: None,
         });
         let resp = handle_list_metrics(&repo, req).await.unwrap().into_inner();
         assert_eq!(resp.items.len(), 2);
-        assert_eq!(resp.total, 3);
-        assert_eq!(resp.offset, 0);
-        assert_eq!(resp.limit, 2);
+        assert!(
+            !resp.next_cursor.is_empty(),
+            "3 rows with limit 2 ⇒ a next cursor"
+        );
     }
 
     #[sqlx::test(migrations = "../stitchd-db/migrations")]
@@ -1138,14 +1127,15 @@ mod handler_tests {
             .unwrap();
         let req = Request::new(ListMetricsRequest {
             environment_id: env.to_string(),
-            offset: None,
-            limit: None,
+            cursor: String::new(),
+            limit: 0,
             kind: None,
             event_key: None,
         });
         let resp = handle_list_metrics(&repo, req).await.unwrap().into_inner();
-        assert_eq!(resp.limit, DEFAULT_LIST_LIMIT);
-        assert_eq!(resp.total, 1);
+        // Single row fits well within the default page ⇒ no next cursor.
+        assert_eq!(resp.items.len(), 1);
+        assert!(resp.next_cursor.is_empty());
     }
 
     #[sqlx::test(migrations = "../stitchd-db/migrations")]
@@ -1161,8 +1151,8 @@ mod handler_tests {
         // raw page row count (filter is post-pagination, by design).
         let req = Request::new(ListMetricsRequest {
             environment_id: env.to_string(),
-            offset: Some(0),
-            limit: Some(50),
+            cursor: String::new(),
+            limit: 50,
             kind: Some("ratio".into()),
             event_key: None,
         });
@@ -1652,12 +1642,12 @@ mod handler_tests {
                 .cloned()
                 .collect())
         }
-        async fn list_by_environment_paginated(
+        async fn list_by_environment_keyset(
             &self,
             _env_id: EnvironmentId,
-            _offset: u64,
+            _after: Option<stitchd_db::KeysetCursor>,
             _limit: u64,
-        ) -> Result<(Vec<Experiment>, u64), stitchd_db::RepositoryError> {
+        ) -> Result<(Vec<Experiment>, Option<String>), stitchd_db::RepositoryError> {
             unimplemented!()
         }
         async fn create(

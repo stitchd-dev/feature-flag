@@ -9,7 +9,7 @@ import { EmptyState } from '../../components/EmptyState'
 import { usePaginatedList } from '../../hooks/usePaginatedList'
 import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
-import type { PaginatedResponse } from '../../lib/types'
+import type { CursorPage } from '../../lib/types'
 import type { Segment } from './types'
 import { CreateSegmentModal } from './CreateSegmentModal'
 import { EditSegmentModal } from './EditSegmentModal'
@@ -25,13 +25,14 @@ export function SegmentsList() {
   const [editSegment, setEditSegment] = useState<Segment | null>(null)
   const [deleteSegment, setDeleteSegment] = useState<Segment | null>(null)
 
-  const { data: segments, total, loading, error, page, onPageChange, refresh: loadSegments } = usePaginatedList<Segment>(
-    async ({ page: p, perPage, signal }) => {
-      if (!envId) return { items: [], total: 0 }
-      const qs = new URLSearchParams({ env_id: envId, page: String(p), per_page: String(perPage) })
-      const { data } = await api.get<PaginatedResponse<Segment>>(`/v1/segments?${qs}`, { signal })
+  const { data: segments, loading, error, hasNext, hasPrev, onNext, onPrev, refresh: loadSegments } = usePaginatedList<Segment>(
+    async ({ cursor, limit, signal }) => {
+      if (!envId) return { items: [], next_cursor: null }
+      const qs = new URLSearchParams({ env_id: envId, limit: String(limit) })
+      if (cursor != null) qs.set('cursor', cursor)
+      const { data } = await api.get<CursorPage<Segment>>(`/v1/segments?${qs}`, { signal })
       const items = data.items ?? (Array.isArray(data) ? data : [])
-      return { items, total: data.total ?? items.length }
+      return { items, next_cursor: data.next_cursor ?? null }
     },
     [envId],
     PER_PAGE,
@@ -202,7 +203,7 @@ export function SegmentsList() {
                     ))}
                   </tbody>
                 </table>
-                <Pagination page={page} perPage={PER_PAGE} total={total} onChange={onPageChange} />
+                <Pagination hasPrev={hasPrev} hasNext={hasNext} onPrev={onPrev} onNext={onNext} />
               </div>
             )}
           </>

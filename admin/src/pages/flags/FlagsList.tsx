@@ -13,7 +13,7 @@ import { PermissionGate } from '../../components/PermissionGate'
 import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
 import { PERMISSIONS } from '../../lib/permissions'
-import type { AdminFlagResponse, PaginatedResponse } from '../../lib/types'
+import type { AdminFlagResponse, CursorPage } from '../../lib/types'
 import { CreateFlagModal } from './CreateFlagModal'
 import { FlagBadges, buildPrerequisiteOfSet } from './flagBadges'
 
@@ -97,18 +97,19 @@ export function FlagsList() {
 
   const canWrite = can(PERMISSIONS.FLAG_WRITE)
 
-  const { data: flags, total, loading, error, page, onPageChange } = usePaginatedList<AdminFlagResponse>(
-    async ({ page: p, perPage, signal }) => {
-      if (!projectId) return { items: [], total: 0 }
-      const qs = new URLSearchParams({ page: String(p), per_page: String(perPage) })
+  const { data: flags, loading, error, hasNext, hasPrev, onNext, onPrev } = usePaginatedList<AdminFlagResponse>(
+    async ({ cursor, limit, signal }) => {
+      if (!projectId) return { items: [], next_cursor: null }
+      const qs = new URLSearchParams({ limit: String(limit) })
+      if (cursor != null) qs.set('cursor', cursor)
       if (showArchived) qs.set('include_archived', 'true')
-      const { data } = await api.get<PaginatedResponse<AdminFlagResponse>>(
+      const { data } = await api.get<CursorPage<AdminFlagResponse>>(
         `/v1/projects/${projectId}/flags?${qs}`,
         { signal },
       )
       const items = data.items ?? (Array.isArray(data) ? data : [])
       setOptimisticEnabled(new Map(items.map((f) => [f.key, f.enabled])))
-      return { items, total: data.total ?? items.length }
+      return { items, next_cursor: data.next_cursor ?? null }
     },
     [projectId, showArchived],
     PER_PAGE,
@@ -185,7 +186,7 @@ export function FlagsList() {
         <PageHeader
         crumbs={['Flags']}
         title="Feature Flags"
-        subtitle={`${total} flags. First-true rule wins; flag types are immutable after creation.`}
+        subtitle="First-true rule wins; flag types are immutable after creation."
         actions={
           <>
             <button
@@ -311,7 +312,7 @@ export function FlagsList() {
                     </tbody>
                   </table>
                 </div>
-                <Pagination page={page} perPage={PER_PAGE} total={total} onChange={onPageChange} />
+                <Pagination hasPrev={hasPrev} hasNext={hasNext} onPrev={onPrev} onNext={onNext} />
               </div>
             )}
 

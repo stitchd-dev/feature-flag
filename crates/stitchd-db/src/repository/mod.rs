@@ -22,7 +22,10 @@ use stitchd_core::{
 use crate::RepositoryError;
 
 pub mod composite;
+pub mod cursor;
 pub mod pg;
+
+pub use cursor::{CursorError, EmailKeysetCursor, KeysetCursor, effective_limit};
 
 // ---------------------------------------------------------------------------
 // Scylla-backed list segment types
@@ -137,15 +140,18 @@ pub trait SdkKeyRepository: Send + Sync {
         environment_id: EnvironmentId,
     ) -> Result<Vec<SdkKey>, RepositoryError>;
 
-    /// List SDK keys for an environment with offset pagination.
+    /// List SDK keys for an environment with **keyset** (cursor) pagination,
+    /// ordered by `(created_at, id)`.
     ///
-    /// Returns `(page_items, total_count)`.
-    async fn list_by_environment_paginated(
+    /// `after` is the keyset position from a prior page (`None` for the first
+    /// page). Returns `(page_items, next_cursor)` where `next_cursor` is the
+    /// opaque token for the following page, or `None` on the last page.
+    async fn list_by_environment_keyset(
         &self,
         environment_id: EnvironmentId,
-        offset: u64,
+        after: Option<crate::KeysetCursor>,
         limit: u64,
-    ) -> Result<(Vec<stitchd_core::tenant::SdkKey>, u64), RepositoryError>;
+    ) -> Result<(Vec<stitchd_core::tenant::SdkKey>, Option<String>), RepositoryError>;
 
     /// Persist a new SDK key.
     async fn create(&self, key: &SdkKey) -> Result<(), RepositoryError>;
@@ -252,16 +258,18 @@ pub trait FlagRepository: Send + Sync {
         project_id: ProjectId,
     ) -> Result<Vec<stitchd_core::flag::FlagRecord>, RepositoryError>;
 
-    /// List non-deleted flags in a project with offset pagination.
+    /// List non-deleted flags in a project with **keyset** (cursor) pagination,
+    /// ordered by `(created_at, id)`.
     ///
-    /// Returns `(page_items, total_count)` where `total_count` is the count of
-    /// all non-deleted flags for the project (regardless of offset/limit).
-    async fn list_by_project_paginated(
+    /// `after` is the keyset position from a prior page (`None` for the first
+    /// page). Returns `(page_items, next_cursor)` where `next_cursor` is the
+    /// opaque token for the following page, or `None` on the last page.
+    async fn list_by_project_keyset(
         &self,
         project_id: ProjectId,
-        offset: u64,
+        after: Option<crate::KeysetCursor>,
         limit: u64,
-    ) -> Result<(Vec<stitchd_core::flag::FlagRecord>, u64), RepositoryError>;
+    ) -> Result<(Vec<stitchd_core::flag::FlagRecord>, Option<String>), RepositoryError>;
 
     /// List all flags in a project including soft-deleted (archived) ones.
     async fn list_by_project_all(
@@ -383,15 +391,18 @@ pub trait SegmentRepository: Send + Sync {
         environment_id: EnvironmentId,
     ) -> Result<Vec<stitchd_core::segment::Segment>, RepositoryError>;
 
-    /// List non-deleted segments in an environment with offset pagination.
+    /// List non-deleted segments in an environment with **keyset** (cursor)
+    /// pagination, ordered by `(created_at, id)`.
     ///
-    /// Returns `(page_items, total_count)`.
-    async fn list_by_environment_paginated(
+    /// `after` is the keyset position from a prior page (`None` for the first
+    /// page). Returns `(page_items, next_cursor)` where `next_cursor` is the
+    /// opaque token for the following page, or `None` on the last page.
+    async fn list_by_environment_keyset(
         &self,
         environment_id: EnvironmentId,
-        offset: u64,
+        after: Option<crate::KeysetCursor>,
         limit: u64,
-    ) -> Result<(Vec<stitchd_core::segment::Segment>, u64), RepositoryError>;
+    ) -> Result<(Vec<stitchd_core::segment::Segment>, Option<String>), RepositoryError>;
 
     /// Persist a new segment.
     async fn create(&self, segment: &stitchd_core::segment::Segment)
@@ -583,16 +594,18 @@ pub trait ExperimentRepository: Send + Sync {
         status_filter: Option<ExperimentStatus>,
     ) -> Result<Vec<Experiment>, RepositoryError>;
 
-    /// List non-deleted experiments in an environment with offset pagination.
+    /// List non-deleted experiments in an environment with **keyset** (cursor)
+    /// pagination, ordered by `(created_at, id)`.
     ///
-    /// Returns `(page_items, total_count)` where `total_count` is the count of
-    /// all non-deleted experiments for the environment (regardless of offset/limit).
-    async fn list_by_environment_paginated(
+    /// `after` is the keyset position from a prior page (`None` for the first
+    /// page). Returns `(page_items, next_cursor)` where `next_cursor` is the
+    /// opaque token for the following page, or `None` on the last page.
+    async fn list_by_environment_keyset(
         &self,
         env_id: EnvironmentId,
-        offset: u64,
+        after: Option<crate::KeysetCursor>,
         limit: u64,
-    ) -> Result<(Vec<Experiment>, u64), RepositoryError>;
+    ) -> Result<(Vec<Experiment>, Option<String>), RepositoryError>;
 
     /// Persist a new experiment.
     async fn create(&self, experiment: &Experiment) -> Result<(), RepositoryError>;
@@ -748,16 +761,20 @@ pub trait EventDefinitionRepository: Send + Sync {
         environment_id: EnvironmentId,
     ) -> Result<Vec<EventDefinition>, RepositoryError>;
 
-    /// List definitions for an environment with offset pagination.
-    /// Returns `(page_items, total_count)`. `include_archived = true`
-    /// includes soft-deleted rows in both the page and the total.
-    async fn list_by_environment_paginated(
+    /// List definitions for an environment with **keyset** (cursor) pagination,
+    /// ordered by `(created_at, id)`. `include_archived = true` includes
+    /// soft-deleted rows.
+    ///
+    /// `after` is the keyset position from a prior page (`None` for the first
+    /// page). Returns `(page_items, next_cursor)` where `next_cursor` is the
+    /// opaque token for the following page, or `None` on the last page.
+    async fn list_by_environment_keyset(
         &self,
         environment_id: EnvironmentId,
-        offset: u64,
+        after: Option<crate::KeysetCursor>,
         limit: u64,
         include_archived: bool,
-    ) -> Result<(Vec<EventDefinition>, u64), RepositoryError>;
+    ) -> Result<(Vec<EventDefinition>, Option<String>), RepositoryError>;
 
     /// Persist a new definition.
     async fn create(&self, def: &EventDefinition) -> Result<(), RepositoryError>;
@@ -809,14 +826,18 @@ pub trait MetricRepository: Send + Sync {
         environment_id: EnvironmentId,
     ) -> Result<Vec<stitchd_core::metric::MetricDefinition>, RepositoryError>;
 
-    /// List non-deleted metrics for an environment with offset
-    /// pagination. Returns `(page_items, total_count)`.
-    async fn list_by_environment_paginated(
+    /// List non-deleted metrics for an environment with **keyset** (cursor)
+    /// pagination, ordered by `(created_at, id)`.
+    ///
+    /// `after` is the keyset position from a prior page (`None` for the first
+    /// page). Returns `(page_items, next_cursor)` where `next_cursor` is the
+    /// opaque token for the following page, or `None` on the last page.
+    async fn list_by_environment_keyset(
         &self,
         environment_id: EnvironmentId,
-        offset: u64,
+        after: Option<crate::KeysetCursor>,
         limit: u64,
-    ) -> Result<(Vec<stitchd_core::metric::MetricDefinition>, u64), RepositoryError>;
+    ) -> Result<(Vec<stitchd_core::metric::MetricDefinition>, Option<String>), RepositoryError>;
 
     /// List non-deleted metrics in an environment that **directly**
     /// reference the given event key — i.e. aggregation metrics whose

@@ -49,33 +49,32 @@ function goalDirectionArrow(d: MetricRow['goal_direction']): string {
   }
 }
 
-/** Build the GET /v1/metrics query string (page/per_page contract). */
+/** Build the GET /v1/metrics query string (cursor/limit contract). */
 function buildListQuery(args: {
   envId: string
-  page: number
-  perPage: number
+  cursor?: string | null
+  limit: number
   kind?: 'aggregation' | 'ratio' | 'funnel' | 'all'
 }): string {
   const qs = new URLSearchParams({
     env_id: args.envId,
-    page: String(args.page),
-    per_page: String(args.perPage),
+    limit: String(args.limit),
   })
+  if (args.cursor != null) qs.set('cursor', args.cursor)
   if (args.kind && args.kind !== 'all') qs.set('kind', args.kind)
   return qs.toString()
 }
 
-/** Map URL `page=N&kind=K` → fetcher args. */
-function readUrlState(params: URLSearchParams, perPage: number): {
-  page: number
-  offset: number
+/** Map URL `cursor=<opaque>&kind=K` → fetcher args. */
+function readUrlState(params: URLSearchParams): {
+  cursor: string | null
   kind: 'aggregation' | 'ratio' | 'funnel' | 'all'
 } {
-  const page = Math.max(1, Number(params.get('page') ?? 1))
+  const cursor = params.get('cursor')
   const kRaw = params.get('kind') ?? 'all'
   const kind: 'aggregation' | 'ratio' | 'funnel' | 'all' =
     kRaw === 'aggregation' || kRaw === 'ratio' || kRaw === 'funnel' ? kRaw : 'all'
-  return { page, offset: (page - 1) * perPage, kind }
+  return { cursor, kind }
 }
 
 /**
@@ -299,48 +298,51 @@ describe('test_renders_metric_rows_with_kind_chip', () => {
 
 describe('test_kind_filter_filters_list', () => {
   it('omits kind param when filter=all', () => {
-    const qs = buildListQuery({ envId: 'env-1', page: 1, perPage: 50, kind: 'all' })
+    const qs = buildListQuery({ envId: 'env-1', limit: 50, kind: 'all' })
     expect(qs).not.toContain('kind=')
   })
   it('appends kind=aggregation when filtering to aggregation', () => {
-    const qs = buildListQuery({ envId: 'env-1', page: 1, perPage: 50, kind: 'aggregation' })
+    const qs = buildListQuery({ envId: 'env-1', limit: 50, kind: 'aggregation' })
     expect(qs).toContain('kind=aggregation')
   })
   it('appends kind=ratio when filtering to ratio', () => {
-    const qs = buildListQuery({ envId: 'env-1', page: 1, perPage: 50, kind: 'ratio' })
+    const qs = buildListQuery({ envId: 'env-1', limit: 50, kind: 'ratio' })
     expect(qs).toContain('kind=ratio')
   })
-  it('always includes env_id, page, per_page', () => {
-    const qs = buildListQuery({ envId: 'env-99', page: 3, perPage: 25 })
+  it('always includes env_id + limit; omits cursor on the first page', () => {
+    const qs = buildListQuery({ envId: 'env-99', limit: 25 })
     expect(qs).toContain('env_id=env-99')
-    expect(qs).toContain('page=3')
-    expect(qs).toContain('per_page=25')
+    expect(qs).toContain('limit=25')
+    expect(qs).not.toContain('cursor=')
+  })
+  it('includes the opaque cursor token on later pages', () => {
+    const qs = buildListQuery({ envId: 'env-1', cursor: 'CUR_OPAQUE', limit: 50 })
+    expect(qs).toContain('cursor=CUR_OPAQUE')
   })
 })
 
 describe('test_pagination_url_sync', () => {
-  it('reads page=N from search params', () => {
-    const p = new URLSearchParams({ page: '3' })
-    expect(readUrlState(p, 50)).toEqual({ page: 3, offset: 100, kind: 'all' })
+  it('reads cursor from search params', () => {
+    const p = new URLSearchParams({ cursor: 'CUR_A' })
+    expect(readUrlState(p)).toEqual({ cursor: 'CUR_A', kind: 'all' })
   })
-  it('clamps page below 1 to 1', () => {
-    const p = new URLSearchParams({ page: '-5' })
-    expect(readUrlState(p, 50).page).toBe(1)
+  it('cursor is null on the first page (absent param)', () => {
+    expect(readUrlState(new URLSearchParams()).cursor).toBeNull()
   })
   it('rejects unknown kinds (falls back to all)', () => {
     const p = new URLSearchParams({ kind: 'gibberish' })
-    expect(readUrlState(p, 50).kind).toBe('all')
+    expect(readUrlState(p).kind).toBe('all')
   })
   it('preserves valid kind values', () => {
-    expect(readUrlState(new URLSearchParams({ kind: 'aggregation' }), 50).kind).toBe(
+    expect(readUrlState(new URLSearchParams({ kind: 'aggregation' })).kind).toBe(
       'aggregation',
     )
-    expect(readUrlState(new URLSearchParams({ kind: 'ratio' }), 50).kind).toBe('ratio')
-    expect(readUrlState(new URLSearchParams({ kind: 'funnel' }), 50).kind).toBe('funnel')
+    expect(readUrlState(new URLSearchParams({ kind: 'ratio' })).kind).toBe('ratio')
+    expect(readUrlState(new URLSearchParams({ kind: 'funnel' })).kind).toBe('funnel')
   })
-  it('computes correct offset from page', () => {
-    expect(readUrlState(new URLSearchParams({ page: '1' }), 50).offset).toBe(0)
-    expect(readUrlState(new URLSearchParams({ page: '5' }), 25).offset).toBe(100)
+  it('carries cursor + kind together', () => {
+    const p = new URLSearchParams({ cursor: 'CUR_B', kind: 'funnel' })
+    expect(readUrlState(p)).toEqual({ cursor: 'CUR_B', kind: 'funnel' })
   })
 })
 

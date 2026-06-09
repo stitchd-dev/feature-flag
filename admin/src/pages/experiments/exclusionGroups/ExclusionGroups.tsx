@@ -42,22 +42,23 @@ export function ExclusionGroups() {
 
   const {
     data: groups,
-    total,
     loading,
     error,
-    page,
-    onPageChange,
+    hasNext,
+    hasPrev,
+    onNext,
+    onPrev,
     refresh,
   } = usePaginatedList<ExclusionGroup>(
-    async ({ page: p, perPage, signal }) => {
-      if (!envId) return { items: [], total: 0 }
+    async ({ cursor, limit, signal }) => {
+      if (!envId) return { items: [], next_cursor: null }
       const res = await listExclusionGroups(
         envId,
-        { page: p, per_page: perPage },
+        { cursor, limit },
         signal,
       )
       const items = res.items ?? []
-      return { items, total: res.total ?? items.length }
+      return { items, next_cursor: res.next_cursor ?? null }
     },
     [envId],
     PER_PAGE,
@@ -242,7 +243,7 @@ export function ExclusionGroups() {
                     ))}
                   </tbody>
                 </table>
-                <Pagination page={page} perPage={PER_PAGE} total={total} onChange={onPageChange} />
+                <Pagination hasPrev={hasPrev} hasNext={hasNext} onPrev={onPrev} onNext={onNext} />
               </div>
             )}
           </>

@@ -191,14 +191,17 @@ impl ExperimentRepository for PgExperimentRepository {
         }
     }
 
-    async fn list_by_environment_paginated(
+    async fn list_by_environment_keyset(
         &self,
         env_id: EnvironmentId,
-        offset: u64,
+        after: Option<crate::KeysetCursor>,
         limit: u64,
-    ) -> Result<(Vec<Experiment>, u64), RepositoryError> {
-        use sqlx::Row as _;
-
+    ) -> Result<(Vec<Experiment>, Option<String>), RepositoryError> {
+        // Keyset pagination ordered by (created_at, id): fetch limit+1 rows; the
+        // surplus row signals a next page. The row-value comparison
+        // `(created_at, id) > ($cursor_created_at, $cursor_id)` resumes strictly
+        // after the prior page's last row. A NULL cursor (first page) admits all.
+        #[allow(clippy::cast_possible_wrap)]
         let rows = sqlx::query(
             r"
             SELECT
@@ -218,40 +221,41 @@ impl ExperimentRepository for PgExperimentRepository {
                     SELECT ARRAY_AGG(v.key ORDER BY v.id)
                     FROM variants v
                     WHERE v.flag_id = e.flag_id
-                ), '{}') AS variant_keys,
-                COUNT(*) OVER() AS total_count
+                ), '{}') AS variant_keys
             FROM experiments e
             LEFT JOIN feature_flags f ON f.id = e.flag_id AND f.deleted_at IS NULL
             WHERE e.env_id = $1 AND e.deleted_at IS NULL
-            ORDER BY e.created_at
-            LIMIT $2 OFFSET $3
+              AND ($2::timestamptz IS NULL OR (e.created_at, e.id) > ($2, $3))
+            ORDER BY e.created_at, e.id
+            LIMIT $4
             ",
         )
         .bind(env_id.as_uuid())
-        .bind({
-            #[allow(clippy::cast_possible_wrap)]
-            let v = limit as i64;
-            v
-        })
-        .bind({
-            #[allow(clippy::cast_possible_wrap)]
-            let v = offset as i64;
-            v
-        })
+        .bind(after.map(|c| c.created_at))
+        .bind(after.map(|c| c.id))
+        .bind((limit + 1) as i64)
         .fetch_all(&self.pool)
         .await
         .map_err(RepositoryError::Database)?;
 
-        let total = rows.first().map_or(0, |r| {
-            let n: i64 = r.get("total_count");
-            #[allow(clippy::cast_sign_loss)]
-            let result = n.max(0) as u64;
-            result
-        });
+        let mut experiments: Vec<Experiment> = rows.iter().map(row_to_experiment).collect();
 
-        let experiments: Vec<Experiment> = rows.iter().map(row_to_experiment).collect();
+        // limit+1 rows ⇒ more pages: drop the surplus and encode the new last
+        // row's keyset as the next cursor.
+        let next_cursor = if experiments.len() as u64 > limit {
+            experiments.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+            experiments.last().map(|e| {
+                crate::KeysetCursor {
+                    created_at: e.created_at,
+                    id: e.id.as_uuid(),
+                }
+                .encode()
+            })
+        } else {
+            None
+        };
 
-        Ok((experiments, total))
+        Ok((experiments, next_cursor))
     }
 
     async fn create(&self, experiment: &Experiment) -> Result<(), RepositoryError> {

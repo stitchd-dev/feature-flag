@@ -37,6 +37,8 @@ export function Dashboard() {
   } = useOrgContext()
 
   const [flagsCount, setFlagsCount] = useState<number | null>(null)
+  // True when more flags exist beyond the single page we sampled for the count.
+  const [flagsHasMore, setFlagsHasMore] = useState(false)
   const [flagsLoading, setFlagsLoading] = useState(false)
 
   // Resolve a friendly org name: check history first, then org list, then fall back to ID.
@@ -53,13 +55,20 @@ export function Dashboard() {
   useEffect(() => {
     if (!projectId) {
       setFlagsCount(null)
+      setFlagsHasMore(false)
       return
     }
     let cancelled = false
     setFlagsLoading(true)
-    listFlags(projectId, { page: 1, per_page: 1 })
+    // The flags list endpoint is cursor-paginated and no longer returns a total.
+    // Fetch a single page and report the number of flags loaded; when a further
+    // page exists the displayed value is suffixed with "+" (see StatCard below).
+    listFlags(projectId, { limit: 100 })
       .then((res) => {
-        if (!cancelled) setFlagsCount(res.total ?? res.items?.length ?? 0)
+        if (!cancelled) {
+          setFlagsCount(res.items?.length ?? 0)
+          setFlagsHasMore(Boolean(res.next_cursor))
+        }
       })
       .catch(() => {
         if (!cancelled) setFlagsCount(null)
@@ -124,7 +133,7 @@ export function Dashboard() {
               />
               <StatCard
                 label="Flags"
-                value={!projectId ? '—' : flagsLoading ? '…' : String(counts.flags ?? 0)}
+                value={!projectId ? '—' : flagsLoading ? '…' : `${counts.flags ?? 0}${flagsHasMore ? '+' : ''}`}
                 hint={
                   !projectId
                     ? 'Select a project first'

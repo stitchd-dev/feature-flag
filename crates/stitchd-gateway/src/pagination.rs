@@ -107,6 +107,141 @@ impl<T: Serialize> PaginatedResponse<T> {
     }
 }
 
+// ===========================================================================
+// Cursor (keyset) pagination — platform_hardening_20260608 Phase 4
+// ===========================================================================
+//
+// The guidelines-mandated contract that supersedes the page/per_page envelope
+// above (see conductor/tech-stack.md). Request: `?cursor=<opaque>&limit=N`.
+// Response: `{ items, next_cursor }`. The opaque token is base64url(JSON(keyset
+// position)) — the last returned row's stable sort key(s). Keyset pagination is
+// O(1) per page and stable under concurrent inserts, at the cost of no random
+// page-number access.
+
+use base64::Engine as _;
+
+const DEFAULT_LIMIT: u32 = 50;
+const MAX_LIMIT: u32 = 200;
+
+/// Error decoding an opaque cursor token (malformed base64 / JSON).
+#[derive(Debug, thiserror::Error)]
+pub enum CursorError {
+    /// The token was not valid base64url.
+    #[error("invalid cursor encoding")]
+    Decode,
+    /// The decoded bytes were not the expected keyset JSON shape.
+    #[error("invalid cursor payload")]
+    Payload,
+}
+
+/// Encode a keyset position into an opaque cursor token: `base64url(JSON(key))`.
+/// Clients treat the result as opaque.
+#[must_use]
+pub fn encode_cursor<K: Serialize>(key: &K) -> String {
+    let json = serde_json::to_vec(key).unwrap_or_default();
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json)
+}
+
+/// Decode an opaque cursor token back into its keyset position.
+///
+/// # Errors
+/// [`CursorError::Decode`] if the token is not valid base64url;
+/// [`CursorError::Payload`] if the bytes are not the expected keyset JSON.
+pub fn decode_cursor<K: serde::de::DeserializeOwned>(token: &str) -> Result<K, CursorError> {
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(token)
+        .map_err(|_| CursorError::Decode)?;
+    serde_json::from_slice(&bytes).map_err(|_| CursorError::Payload)
+}
+
+/// Query parameters for cursor-paginated list endpoints (`?cursor=&limit=`).
+///
+/// Absent `cursor` → first page; absent `limit` → 50, capped at 200.
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
+pub struct CursorParams {
+    /// Opaque keyset cursor from a previous response's `next_cursor`.
+    #[serde(default)]
+    pub cursor: Option<String>,
+    /// Page size (capped at 200).
+    #[serde(default, deserialize_with = "de_opt_u32_from_str")]
+    pub limit: Option<u32>,
+}
+
+/// Like [`de_u32_from_str`] but for the optional `limit` field.
+fn de_opt_u32_from_str<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u32>, D::Error> {
+    Ok(Some(de_u32_from_str(d)?))
+}
+
+impl CursorParams {
+    /// Effective page size (default 50, capped at 200).
+    #[must_use]
+    pub fn effective_limit(&self) -> u32 {
+        match self.limit {
+            None | Some(0) => DEFAULT_LIMIT,
+            Some(n) => n.min(MAX_LIMIT),
+        }
+    }
+
+    /// Decode the opaque cursor into the repo's keyset position type, if present.
+    ///
+    /// # Errors
+    /// Propagates [`CursorError`] when a present cursor is malformed.
+    pub fn decode<K: serde::de::DeserializeOwned>(&self) -> Result<Option<K>, CursorError> {
+        match &self.cursor {
+            None => Ok(None),
+            Some(tok) => decode_cursor(tok).map(Some),
+        }
+    }
+}
+
+/// Generic cursor-paginated response: `{ items, next_cursor }`.
+#[derive(Debug, Serialize)]
+pub struct CursorPage<T: Serialize> {
+    /// Items on this page (at most `limit`).
+    pub items: Vec<T>,
+    /// Opaque cursor for the next page, or `null` on the last page.
+    pub next_cursor: Option<String>,
+}
+
+impl<T: Serialize> CursorPage<T> {
+    /// Build a page from rows fetched with the **fetch-`limit+1`** idiom.
+    ///
+    /// Callers query `effective_limit() + 1` rows: if the extra row is present
+    /// there is a next page, so the surplus row is dropped and the new last
+    /// row's keyset key is encoded into `next_cursor`. `key_of` extracts the
+    /// keyset position from an item.
+    pub fn from_overfetch<K: Serialize>(
+        mut rows: Vec<T>,
+        limit: usize,
+        key_of: impl Fn(&T) -> K,
+    ) -> Self {
+        let has_more = rows.len() > limit;
+        if has_more {
+            rows.truncate(limit);
+        }
+        let next_cursor = if has_more {
+            rows.last().map(|last| encode_cursor(&key_of(last)))
+        } else {
+            None
+        };
+        Self {
+            items: rows,
+            next_cursor,
+        }
+    }
+
+    /// Build a page from a **keyset backend** that already returned the opaque
+    /// next-cursor token (empty string ⇒ last page). The gateway forwards the
+    /// token untouched — the owning service's repo owns its format.
+    #[must_use]
+    pub fn from_token(items: Vec<T>, next_cursor: String) -> Self {
+        Self {
+            items,
+            next_cursor: (!next_cursor.is_empty()).then_some(next_cursor),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -117,6 +252,130 @@ mod tests {
 
     fn params(page: u32, per_page: u32) -> PaginationParams {
         PaginationParams { page, per_page }
+    }
+
+    // ── Cursor pagination ───────────────────────────────────────────────────
+
+    #[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
+    struct Key {
+        created_at: i64,
+        id: u32,
+    }
+
+    #[test]
+    fn cursor_roundtrips_through_opaque_token() {
+        let k = Key {
+            created_at: 1_700_000_000,
+            id: 42,
+        };
+        let tok = encode_cursor(&k);
+        // Opaque: not the raw JSON.
+        assert!(!tok.contains("created_at"));
+        let back: Key = decode_cursor(&tok).unwrap();
+        assert_eq!(back, k);
+    }
+
+    #[test]
+    fn decode_rejects_garbage_token() {
+        assert!(matches!(
+            decode_cursor::<Key>("!!!not-base64!!!"),
+            Err(CursorError::Decode)
+        ));
+        // Valid base64 but wrong JSON shape → Payload error.
+        let bad = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"\"a string\"");
+        assert!(matches!(
+            decode_cursor::<Key>(&bad),
+            Err(CursorError::Payload)
+        ));
+    }
+
+    #[test]
+    fn cursor_limit_defaults_and_caps() {
+        let none = CursorParams {
+            cursor: None,
+            limit: None,
+        };
+        assert_eq!(none.effective_limit(), 50);
+        assert_eq!(
+            CursorParams {
+                cursor: None,
+                limit: Some(0)
+            }
+            .effective_limit(),
+            50
+        );
+        assert_eq!(
+            CursorParams {
+                cursor: None,
+                limit: Some(500)
+            }
+            .effective_limit(),
+            200
+        );
+        assert_eq!(
+            CursorParams {
+                cursor: None,
+                limit: Some(75)
+            }
+            .effective_limit(),
+            75
+        );
+    }
+
+    #[test]
+    fn cursor_params_decode_present_and_absent() {
+        let k = Key {
+            created_at: 1,
+            id: 2,
+        };
+        let with = CursorParams {
+            cursor: Some(encode_cursor(&k)),
+            limit: None,
+        };
+        assert_eq!(with.decode::<Key>().unwrap(), Some(k));
+        let without = CursorParams {
+            cursor: None,
+            limit: None,
+        };
+        assert_eq!(without.decode::<Key>().unwrap(), None);
+    }
+
+    #[test]
+    fn page_from_overfetch_sets_next_cursor_when_more() {
+        // limit=2, fetched 3 (overfetch) → next_cursor points at item #2.
+        let rows = vec![
+            Key {
+                created_at: 1,
+                id: 1,
+            },
+            Key {
+                created_at: 2,
+                id: 2,
+            },
+            Key {
+                created_at: 3,
+                id: 3,
+            },
+        ];
+        let page = CursorPage::from_overfetch(rows, 2, |k| k.clone());
+        assert_eq!(page.items.len(), 2, "surplus row dropped");
+        let next = page.next_cursor.expect("has a next page");
+        let key: Key = decode_cursor(&next).unwrap();
+        assert_eq!(key.id, 2, "cursor is the last returned row");
+    }
+
+    #[test]
+    fn page_from_overfetch_no_next_on_last_page() {
+        let rows = vec![Key {
+            created_at: 1,
+            id: 1,
+        }];
+        let page = CursorPage::from_overfetch(rows, 2, |k| k.clone());
+        assert_eq!(page.items.len(), 1);
+        assert!(
+            page.next_cursor.is_none(),
+            "fewer than limit+1 rows ⇒ last page"
+        );
     }
 
     #[test]

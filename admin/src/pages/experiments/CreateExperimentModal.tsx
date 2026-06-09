@@ -1081,7 +1081,7 @@ function ExclusionGroupPicker({ envId }: { envId: string }) {
   useEffect(() => {
     if (!envId) return
     const ctrl = new AbortController()
-    listExclusionGroups(envId, { per_page: 200 }, ctrl.signal)
+    listExclusionGroups(envId, { limit: 200 }, ctrl.signal)
       .then((res) => setGroups(res.items ?? []))
       .catch((err: unknown) => {
         if ((err as { code?: string }).code === 'ERR_CANCELED') return

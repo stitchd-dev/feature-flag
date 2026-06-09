@@ -493,16 +493,12 @@ impl ManagementService for ManagementServiceImpl {
     ) -> Result<Response<ListSdkKeysResponse>, Status> {
         let r = request.into_inner();
         let env_id = parse_env_id(&r.environment_id)?;
-        let page = if r.page == 0 { 1u64 } else { u64::from(r.page) };
-        let per_page = if r.per_page == 0 {
-            50u64
-        } else {
-            u64::from(r.per_page).min(200)
-        };
-        let offset = (page - 1) * per_page;
-        let (keys, total) = self
+        let after = stitchd_db::KeysetCursor::decode_opt(Some(&r.cursor))
+            .map_err(|_| Status::invalid_argument("invalid cursor"))?;
+        let limit = u64::from(stitchd_db::effective_limit(r.limit, 50, 200));
+        let (keys, next_cursor) = self
             .sdk_key_repo
-            .list_by_environment_paginated(env_id, offset, per_page)
+            .list_by_environment_keyset(env_id, after, limit)
             .await
             .map_err(map_repo_err)?;
         let summaries = keys
@@ -517,7 +513,7 @@ impl ManagementService for ManagementServiceImpl {
             .collect();
         Ok(Response::new(ListSdkKeysResponse {
             sdk_keys: summaries,
-            total,
+            next_cursor: next_cursor.unwrap_or_default(),
         }))
     }
 
@@ -560,16 +556,12 @@ impl ManagementService for ManagementServiceImpl {
     ) -> Result<Response<ListOrgUsersResponse>, Status> {
         let r = request.into_inner();
         let org_id = parse_org_id(&r.org_id)?;
-        let page = if r.page == 0 { 1u64 } else { u64::from(r.page) };
-        let per_page = if r.per_page == 0 {
-            50u64
-        } else {
-            u64::from(r.per_page).min(200)
-        };
-        let offset = (page - 1) * per_page;
-        let (user_pairs, total) = self
+        let after = stitchd_db::EmailKeysetCursor::decode_opt(Some(&r.cursor))
+            .map_err(|_| Status::invalid_argument("invalid cursor"))?;
+        let limit = u64::from(stitchd_db::effective_limit(r.limit, 50, 200));
+        let (user_pairs, next_cursor) = self
             .user_repo
-            .list_org_users_paginated(org_id, offset, per_page)
+            .list_org_users_keyset(org_id, after, limit)
             .await
             .map_err(map_repo_err)?;
         let users = user_pairs
@@ -585,7 +577,10 @@ impl ManagementService for ManagementServiceImpl {
                 created_at: u.created_at.to_rfc3339(),
             })
             .collect();
-        Ok(Response::new(ListOrgUsersResponse { users, total }))
+        Ok(Response::new(ListOrgUsersResponse {
+            users,
+            next_cursor: next_cursor.unwrap_or_default(),
+        }))
     }
 
     async fn remove_org_user(
@@ -766,13 +761,13 @@ mod tests {
                 .ok_or_else(|| RepositoryError::NotFound { id: id.to_string() })?;
             Ok(())
         }
-        async fn list_by_environment_paginated(
+        async fn list_by_environment_keyset(
             &self,
             _environment_id: EnvironmentId,
-            _offset: u64,
+            _after: Option<stitchd_db::KeysetCursor>,
             _limit: u64,
-        ) -> Result<(Vec<SdkKey>, u64), RepositoryError> {
-            Ok((vec![], 0))
+        ) -> Result<(Vec<SdkKey>, Option<String>), RepositoryError> {
+            Ok((vec![], None))
         }
         async fn find_active_by_environment(
             &self,
@@ -830,13 +825,13 @@ mod tests {
         ) -> Result<Vec<(User, OrgRole)>, RepositoryError> {
             Ok(vec![])
         }
-        async fn list_org_users_paginated(
+        async fn list_org_users_keyset(
             &self,
             _: OrganisationId,
-            _offset: u64,
-            _limit: u64,
-        ) -> Result<(Vec<(User, OrgRole)>, u64), RepositoryError> {
-            Ok((vec![], 0))
+            _: Option<stitchd_db::EmailKeysetCursor>,
+            _: u64,
+        ) -> Result<(Vec<(User, OrgRole)>, Option<String>), RepositoryError> {
+            Ok((vec![], None))
         }
     }
 
@@ -1110,7 +1105,7 @@ mod tests {
             .await
             .unwrap();
 
-        // StubSdkKeyRepo.list_by_environment_paginated returns empty — just check it succeeds
+        // StubSdkKeyRepo.list_by_environment_keyset returns empty — just check it succeeds
         let inner = resp.into_inner();
         assert_eq!(inner.sdk_keys.len(), 0);
     }

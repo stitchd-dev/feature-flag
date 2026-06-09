@@ -1,21 +1,15 @@
 import { I } from './icons'
 
 interface PaginationProps {
-  page: number
-  perPage: number
-  total: number
-  onChange: (page: number) => void
+  hasPrev: boolean
+  hasNext: boolean
+  onPrev: () => void
+  onNext: () => void
 }
 
-export function Pagination({ page, perPage, total, onChange }: PaginationProps) {
-  const totalPages = Math.max(1, Math.ceil(total / perPage))
-  const isFirst = page <= 1
-  const isLast = page >= totalPages
-
-  if (totalPages <= 1 && total <= perPage) return null
-
-  const from = Math.min((page - 1) * perPage + 1, total)
-  const to = Math.min(page * perPage, total)
+export function Pagination({ hasPrev, hasNext, onPrev, onNext }: PaginationProps) {
+  // Nothing to navigate to in either direction — hide the control entirely.
+  if (!hasPrev && !hasNext) return null
 
   return (
     <div
@@ -30,25 +24,21 @@ export function Pagination({ page, perPage, total, onChange }: PaginationProps) 
         color: 'var(--fg-muted)',
       }}
     >
-      <span>{from}–{to} of {total}</span>
       <button
         className="icon-btn"
-        disabled={isFirst}
-        onClick={() => !isFirst && onChange(page - 1)}
+        disabled={!hasPrev}
+        onClick={() => hasPrev && onPrev()}
         aria-label="Previous page"
-        style={{ opacity: isFirst ? 0.35 : 1 }}
+        style={{ opacity: hasPrev ? 1 : 0.35 }}
       >
         <I.chevronLeft size={14} />
       </button>
-      <span style={{ fontVariantNumeric: 'tabular-nums' }}>
-        {page} / {totalPages}
-      </span>
       <button
         className="icon-btn"
-        disabled={isLast}
-        onClick={() => !isLast && onChange(page + 1)}
+        disabled={!hasNext}
+        onClick={() => hasNext && onNext()}
         aria-label="Next page"
-        style={{ opacity: isLast ? 0.35 : 1 }}
+        style={{ opacity: hasNext ? 1 : 0.35 }}
       >
         <I.chevronRight size={14} />
       </button>

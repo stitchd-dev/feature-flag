@@ -434,12 +434,12 @@ mod tests {
             unimplemented!("dispatcher tests do not exercise list_by_environment")
         }
 
-        async fn list_by_environment_paginated(
+        async fn list_by_environment_keyset(
             &self,
             _environment_id: EnvironmentId,
-            _offset: u64,
+            _after: Option<stitchd_db::KeysetCursor>,
             _limit: u64,
-        ) -> Result<(Vec<MetricDefinition>, u64), RepositoryError> {
+        ) -> Result<(Vec<MetricDefinition>, Option<String>), RepositoryError> {
             unimplemented!("dispatcher tests do not exercise list_by_environment_paginated")
         }
 

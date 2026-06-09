@@ -47,7 +47,9 @@ metrics = { workspace = true }
 async-trait = { workspace = true }
 
 # Common types
-uuid = { workspace = true }
+# `v5` (name-based) is enabled on top of the workspace `v4`/`serde` features for
+# the content-addressed event-batch idempotency key (platform_hardening_20260608).
+uuid = { workspace = true, features = ["v5"] }
 chrono = { workspace = true }
 
 [features]

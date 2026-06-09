@@ -118,7 +118,7 @@ impl FlagService for MockFlagService {
     ) -> Result<Response<ListFlagsResponse>, Status> {
         Ok(Response::new(ListFlagsResponse {
             flags: vec![Self::subject_flag(), Self::downstream_flag()],
-            total: 2,
+            next_cursor: String::new(),
         }))
     }
     async fn mutate_flag(

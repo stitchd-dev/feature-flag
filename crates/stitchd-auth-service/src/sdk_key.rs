@@ -147,13 +147,13 @@ mod tests {
                 .collect())
         }
 
-        async fn list_by_environment_paginated(
+        async fn list_by_environment_keyset(
             &self,
             _environment_id: EnvironmentId,
-            _offset: u64,
+            _after: Option<stitchd_db::KeysetCursor>,
             _limit: u64,
-        ) -> Result<(Vec<SdkKey>, u64), RepositoryError> {
-            Ok((vec![], 0))
+        ) -> Result<(Vec<SdkKey>, Option<String>), RepositoryError> {
+            Ok((vec![], None))
         }
 
         async fn find_active_by_hash(&self, key_hash: &str) -> Result<SdkKey, RepositoryError> {
@@ -228,13 +228,13 @@ mod tests {
             ) -> Result<Vec<SdkKey>, RepositoryError> {
                 Ok(vec![])
             }
-            async fn list_by_environment_paginated(
+            async fn list_by_environment_keyset(
                 &self,
                 _: EnvironmentId,
+                _: Option<stitchd_db::KeysetCursor>,
                 _: u64,
-                _: u64,
-            ) -> Result<(Vec<SdkKey>, u64), RepositoryError> {
-                Ok((vec![], 0))
+            ) -> Result<(Vec<SdkKey>, Option<String>), RepositoryError> {
+                Ok((vec![], None))
             }
             async fn create(&self, _: &SdkKey) -> Result<(), RepositoryError> {
                 Ok(())

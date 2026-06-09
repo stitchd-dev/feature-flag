@@ -74,12 +74,12 @@ impl FlagRepository for StubFlagRepo {
     ) -> Result<Vec<FlagRecord>, RepositoryError> {
         unimplemented!()
     }
-    async fn list_by_project_paginated(
+    async fn list_by_project_keyset(
         &self,
         _project_id: ProjectId,
-        _offset: u64,
+        _after: Option<stitchd_db::KeysetCursor>,
         _limit: u64,
-    ) -> Result<(Vec<FlagRecord>, u64), RepositoryError> {
+    ) -> Result<(Vec<FlagRecord>, Option<String>), RepositoryError> {
         unimplemented!()
     }
     async fn list_by_project_all(
@@ -194,12 +194,12 @@ impl SegmentRepository for StubSegmentRepo {
     ) -> Result<Vec<Segment>, RepositoryError> {
         Ok(vec![])
     }
-    async fn list_by_environment_paginated(
+    async fn list_by_environment_keyset(
         &self,
         _env_id: EnvironmentId,
-        _offset: u64,
+        _after: Option<stitchd_db::KeysetCursor>,
         _limit: u64,
-    ) -> Result<(Vec<Segment>, u64), RepositoryError> {
+    ) -> Result<(Vec<Segment>, Option<String>), RepositoryError> {
         unimplemented!()
     }
     async fn create(&self, _s: &Segment) -> Result<(), RepositoryError> {
@@ -322,13 +322,13 @@ impl EventDefinitionRepository for StubEventDefRepo {
     ) -> Result<Vec<EventDefinition>, RepositoryError> {
         Ok(vec![])
     }
-    async fn list_by_environment_paginated(
+    async fn list_by_environment_keyset(
         &self,
         _env_id: EnvironmentId,
-        _offset: u64,
+        _after: Option<stitchd_db::KeysetCursor>,
         _limit: u64,
         _include_archived: bool,
-    ) -> Result<(Vec<EventDefinition>, u64), RepositoryError> {
+    ) -> Result<(Vec<EventDefinition>, Option<String>), RepositoryError> {
         unimplemented!()
     }
     async fn create(&self, _d: &EventDefinition) -> Result<(), RepositoryError> {

@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT request_hash, response_status, response_body, response_content_type\n             FROM idempotency_keys\n             WHERE scope = $1 AND idempotency_key = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "request_hash",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "response_status",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "response_body",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 3,
+        "name": "response_content_type",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "336b3705bfaa75ac5c39da76f3400ba528eb00827cf03fd14ec0a35ee35981ed"
+}

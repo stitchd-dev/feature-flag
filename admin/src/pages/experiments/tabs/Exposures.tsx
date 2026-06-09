@@ -17,7 +17,7 @@
  * The component is intentionally presentational — fetching + URL handling
  * live on the page so this can be tested in isolation.
  */
-import { Pagination } from '../../../components/Pagination'
+import { I } from '../../../components/icons'
 import type {
   ExperimentResults,
   PaginatedExposures,
@@ -344,12 +344,54 @@ export function ExposuresPanel({
                 ))}
               </tbody>
             </table>
-            <Pagination
-              page={page}
-              perPage={exposures.per_page}
-              total={exposures.total}
-              onChange={onPageChange}
-            />
+            {(() => {
+              // The exposures endpoint remains page/total-based (it is not one
+              // of the cursor-migrated list endpoints), so this tab keeps an
+              // inline page-numbered control rather than the shared cursor
+              // <Pagination>. Styling mirrors the former shared component.
+              const totalPages = Math.max(1, Math.ceil(exposures.total / exposures.per_page))
+              const isFirst = page <= 1
+              const isLast = page >= totalPages
+              const from = Math.min((page - 1) * exposures.per_page + 1, exposures.total)
+              const to = Math.min(page * exposures.per_page, exposures.total)
+              return (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'flex-end',
+                    gap: 8,
+                    padding: '10px 16px',
+                    borderTop: '1px solid var(--border-faint)',
+                    fontSize: 13,
+                    color: 'var(--fg-muted)',
+                  }}
+                >
+                  <span>{from}–{to} of {exposures.total}</span>
+                  <button
+                    className="icon-btn"
+                    disabled={isFirst}
+                    onClick={() => !isFirst && onPageChange(page - 1)}
+                    aria-label="Previous page"
+                    style={{ opacity: isFirst ? 0.35 : 1 }}
+                  >
+                    <I.chevronLeft size={14} />
+                  </button>
+                  <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+                    {page} / {totalPages}
+                  </span>
+                  <button
+                    className="icon-btn"
+                    disabled={isLast}
+                    onClick={() => !isLast && onPageChange(page + 1)}
+                    aria-label="Next page"
+                    style={{ opacity: isLast ? 0.35 : 1 }}
+                  >
+                    <I.chevronRight size={14} />
+                  </button>
+                </div>
+              )
+            })()}
           </>
         )}
       </div>

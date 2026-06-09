@@ -71,7 +71,7 @@ impl FlagService for MetadataFlagService {
     ) -> Result<Response<ListFlagsResponse>, Status> {
         Ok(Response::new(ListFlagsResponse {
             flags: vec![self.flag.clone()],
-            total: 1,
+            next_cursor: String::new(),
         }))
     }
     async fn mutate_flag(

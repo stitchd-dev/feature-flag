@@ -21,7 +21,7 @@ use stitchd_proto::analytics::v1::{
 
 use crate::error::GatewayError;
 use crate::middleware::sdk_auth::SdkContext;
-use crate::pagination::{PaginatedResponse, PaginationParams};
+use crate::pagination::{CursorPage, CursorParams};
 use crate::state::GatewayState;
 
 use super::require_permission;
@@ -205,9 +205,13 @@ pub async fn ingest_batch(
     get,
     path = "/v1/environments/{environment_id}/event-definitions",
     tag = "event-definitions",
-    params(("environment_id" = String, Path, description = "Environment ID")),
+    params(
+        ("environment_id" = String, Path, description = "Environment ID"),
+        ("cursor" = Option<String>, Query, description = "Opaque pagination cursor from a previous response"),
+        ("limit" = Option<u32>, Query, description = "Page size (default 50, max 200)"),
+    ),
     responses(
-        (status = 200, description = "Paginated list of event definitions"),
+        (status = 200, description = "Cursor-paginated list of event definitions"),
         (status = 401, description = "Unauthorized"),
     ),
     security(("bearer_jwt" = []))
@@ -215,12 +219,12 @@ pub async fn ingest_batch(
 pub async fn list_event_definitions(
     State(state): State<Arc<GatewayState>>,
     Path(environment_id): Path<String>,
-    Query(pagination): Query<PaginationParams>,
+    Query(cursor): Query<CursorParams>,
 ) -> Result<impl IntoResponse, GatewayError> {
     let req = TonicRequest::new(ListEventDefinitionsRequest {
         environment_id,
-        offset: Some(pagination.offset()),
-        limit: Some(pagination.effective_per_page() as u64),
+        cursor: cursor.cursor.clone().unwrap_or_default(),
+        limit: cursor.effective_limit(),
         include_archived: Some(false),
     });
     let mut client = state.analytics_client.lock().await;
@@ -234,7 +238,7 @@ pub async fn list_event_definitions(
         .into_iter()
         .map(proto_to_event_def_json)
         .collect();
-    Ok(Json(PaginatedResponse::new(items, resp.total, &pagination)))
+    Ok(Json(CursorPage::from_token(items, resp.next_cursor)))
 }
 
 /// `POST /v1/environments/{environment_id}/event-definitions`

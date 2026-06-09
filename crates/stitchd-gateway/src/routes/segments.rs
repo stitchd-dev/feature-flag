@@ -21,7 +21,7 @@ use stitchd_proto::segments::v1::{
 };
 
 use crate::error::GatewayError;
-use crate::pagination::{PaginatedResponse, PaginationParams};
+use crate::pagination::{CursorPage, CursorParams};
 use crate::state::GatewayState;
 
 // ─── REST types ───────────────────────────────────────────────────────────────
@@ -31,7 +31,7 @@ use crate::state::GatewayState;
 pub struct ListSegmentsQuery {
     pub env_id: Option<String>,
     #[serde(flatten)]
-    pub pagination: PaginationParams,
+    pub cursor: CursorParams,
 }
 
 /// Request body for creating a segment.
@@ -211,9 +211,13 @@ use super::require_permission;
     get,
     path = "/v1/segments",
     tag = "segments",
-    params(("env_id" = String, Query, description = "Environment ID (query param)")),
+    params(
+        ("env_id" = String, Query, description = "Environment ID (query param)"),
+        ("cursor" = Option<String>, Query, description = "Opaque pagination cursor from a previous response"),
+        ("limit" = Option<u32>, Query, description = "Page size (default 50, max 200)"),
+    ),
     responses(
-        (status = 200, description = "List of segments", body = Vec<AdminSegmentJson>),
+        (status = 200, description = "Cursor-paginated list of segments"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden — missing segment:read"),
         (status = 502, description = "Segmentation service unavailable"),
@@ -228,11 +232,10 @@ pub async fn list_segments(
     require_permission(&req, "segment:read")?;
 
     let environment_id = query.env_id.unwrap_or_default();
-    let pagination = &query.pagination;
     let rpc = tonic::Request::new(ListAdminSegmentsRequest {
         environment_id,
-        page: pagination.effective_page(),
-        per_page: pagination.effective_per_page(),
+        cursor: query.cursor.cursor.clone().unwrap_or_default(),
+        limit: query.cursor.effective_limit(),
     });
     let mut client = state.segmentation_client.lock().await;
     let inner = client
@@ -241,7 +244,7 @@ pub async fn list_segments(
         .map_err(GatewayError::from)?
         .into_inner();
     let items: Vec<AdminSegmentJson> = inner.segments.iter().map(proto_to_admin_json).collect();
-    Ok(Json(PaginatedResponse::new(items, inner.total, pagination)))
+    Ok(Json(CursorPage::from_token(items, inner.next_cursor)))
 }
 
 /// `POST /v1/segments` — create a new segment.
@@ -304,14 +307,14 @@ pub async fn create_segment(
 pub async fn list_segments_in_env(
     State(state): State<Arc<GatewayState>>,
     Path(environment_id): Path<String>,
-    Query(pagination): Query<PaginationParams>,
+    Query(cursor): Query<CursorParams>,
     req: axum::extract::Request,
 ) -> Result<impl IntoResponse, GatewayError> {
     require_permission(&req, "segment:read")?;
     let rpc = tonic::Request::new(ListAdminSegmentsRequest {
         environment_id,
-        page: pagination.effective_page(),
-        per_page: pagination.effective_per_page(),
+        cursor: cursor.cursor.clone().unwrap_or_default(),
+        limit: cursor.effective_limit(),
     });
     let mut client = state.segmentation_client.lock().await;
     let inner = client
@@ -320,11 +323,7 @@ pub async fn list_segments_in_env(
         .map_err(GatewayError::from)?
         .into_inner();
     let items: Vec<AdminSegmentJson> = inner.segments.iter().map(proto_to_admin_json).collect();
-    Ok(Json(PaginatedResponse::new(
-        items,
-        inner.total,
-        &pagination,
-    )))
+    Ok(Json(CursorPage::from_token(items, inner.next_cursor)))
 }
 
 /// `POST /v1/environments/{environment_id}/segments` — create a new segment scoped to an environment.

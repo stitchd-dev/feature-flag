@@ -53,7 +53,7 @@ use stitchd_proto::analytics::v1::{
 };
 
 use crate::error::GatewayError;
-use crate::pagination::{PaginatedResponse, PaginationParams};
+use crate::pagination::{CursorPage, CursorParams};
 use crate::state::GatewayState;
 
 use super::require_permission;
@@ -65,9 +65,9 @@ use super::require_permission;
 pub struct ListMetricsQuery {
     /// Environment UUID — required.
     pub env_id: String,
-    /// Pagination (page + per_page, 1-based); translated to offset/limit for gRPC.
+    /// Cursor pagination (opaque cursor + limit); translated to offset/limit for gRPC.
     #[serde(flatten)]
-    pub pagination: PaginationParams,
+    pub cursor: CursorParams,
     /// Optional kind filter (`aggregation` | `ratio` | `funnel`).
     pub kind: Option<String>,
     /// Optional event-key filter — restricts results to metrics that
@@ -467,15 +467,15 @@ pub async fn create_metric(
     tag = "metrics",
     params(
         ("env_id" = String, Query, description = "Environment ID"),
-        ("page" = Option<u32>, Query, description = "1-based page number (default 1)"),
-        ("per_page" = Option<u32>, Query, description = "Page size (default 50, max 200)"),
+        ("cursor" = Option<String>, Query, description = "Opaque pagination cursor from a previous response"),
+        ("limit" = Option<u32>, Query, description = "Page size (default 50, max 200)"),
         ("kind" = Option<String>, Query,
             description = "Filter by kind: aggregation | ratio | funnel"),
         ("event_key" = Option<String>, Query,
             description = "Filter to metrics directly referencing this event key"),
     ),
     responses(
-        (status = 200, description = "Paginated metrics"),
+        (status = 200, description = "Cursor-paginated metrics"),
         (status = 400, description = "Invalid env_id"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden — missing metric:read"),
@@ -492,8 +492,8 @@ pub async fn list_metrics(
 
     let rpc = tonic::Request::new(ListMetricsRequest {
         environment_id: query.env_id,
-        offset: Some(query.pagination.offset()),
-        limit: Some(query.pagination.limit()),
+        cursor: query.cursor.cursor.clone().unwrap_or_default(),
+        limit: query.cursor.effective_limit(),
         kind: query.kind,
         event_key: query.event_key,
     });
@@ -504,11 +504,7 @@ pub async fn list_metrics(
     for p in inner.items {
         items.push(proto_to_metric_json(p)?);
     }
-    Ok(Json(PaginatedResponse::new(
-        items,
-        inner.total,
-        &query.pagination,
-    )))
+    Ok(Json(CursorPage::from_token(items, inner.next_cursor)))
 }
 
 /// `GET /v1/metrics/{id}` — fetch one metric.
@@ -1340,16 +1336,12 @@ mod tests {
         let m2 = sample_metric(env, Uuid::new_v4(), "m2");
         *mock.list.lock().await = Some(ListMetricsResponse {
             items: vec![m1, m2],
-            total: 5,
-            offset: 0,
-            limit: 2,
+            next_cursor: "next-page-token".to_string(),
         });
 
         let app = test_router(state);
         let mut req = Request::builder()
-            .uri(format!(
-                "/v1/metrics?env_id={env}&page=1&per_page=2&kind=aggregation"
-            ))
+            .uri(format!("/v1/metrics?env_id={env}&limit=2&kind=aggregation"))
             .body(Body::empty())
             .unwrap();
         req.extensions_mut()
@@ -1359,19 +1351,22 @@ mod tests {
 
         let captured = mock.captured.list.lock().await.clone().unwrap();
         assert_eq!(captured.environment_id, env.to_string());
-        // page=1, per_page=2 translates to offset=0, limit=2 for the gRPC call.
-        assert_eq!(captured.offset, Some(0));
-        assert_eq!(captured.limit, Some(2));
+        // No cursor + limit=2 translates to an empty cursor + limit=2 for the
+        // keyset gRPC call.
+        assert_eq!(captured.cursor, "");
+        assert_eq!(captured.limit, 2);
         assert_eq!(captured.kind.as_deref(), Some("aggregation"));
 
         let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-        assert_eq!(parsed["total"], 5);
-        // Canonical PaginatedResponse envelope: page + per_page (INCON-P002).
-        assert_eq!(parsed["page"], 1);
-        assert_eq!(parsed["per_page"], 2);
+        // Cursor envelope: { items, next_cursor }. 2 of 5 returned at offset 0 ⇒
+        // more rows remain ⇒ next_cursor is present.
+        assert!(
+            parsed["next_cursor"].is_string(),
+            "more rows remain ⇒ next_cursor must be set"
+        );
         assert_eq!(parsed["items"].as_array().unwrap().len(), 2);
         // Domain MetricDefinition serialises with `kind` discriminator.
         assert_eq!(parsed["items"][0]["kind"], "aggregation");

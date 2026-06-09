@@ -125,7 +125,41 @@ async fn main() -> anyhow::Result<()> {
     let auth_client_for_grpc = Arc::clone(&state_arc.auth_client);
     let flag_sdk_backend_for_grpc = Arc::clone(&state_arc.flag_sdk_backend_client);
 
-    let app = build_router(Arc::clone(&state_arc), metrics_handle);
+    let mut app = build_router(Arc::clone(&state_arc), metrics_handle);
+
+    // ── Idempotency-Key middleware (platform_hardening_20260608) ────────────
+    // HTTP-edge request dedup backed by a narrowly-scoped PgPool. Opt-in by
+    // deployment: only enabled when STITCHD_DATABASE_URL is set (the gateway is
+    // otherwise DB-free). Layered OUTSIDE the router so it applies to every
+    // mutating route; it self-filters to POST/PUT/PATCH/DELETE carrying an
+    // `Idempotency-Key` header and fails open on any store error.
+    if let Ok(database_url) = std::env::var("STITCHD_DATABASE_URL") {
+        match sqlx::postgres::PgPoolOptions::new()
+            .max_connections(5)
+            .connect(&database_url)
+            .await
+        {
+            Ok(pool) => {
+                let ttl = stitchd_gateway::idempotency::ttl_from_env();
+                stitchd_gateway::idempotency::spawn_sweeper(pool.clone(), ttl);
+                let store: Arc<dyn stitchd_gateway::idempotency::IdempotencyStore> =
+                    Arc::new(stitchd_gateway::idempotency::PgIdempotencyStore::new(pool));
+                app = app.layer(axum::middleware::from_fn_with_state(
+                    store,
+                    stitchd_gateway::idempotency::idempotency_middleware,
+                ));
+                info!(ttl_secs = ttl.as_secs(), "idempotency middleware enabled");
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "STITCHD_DATABASE_URL set but Postgres connect failed; \
+                     idempotency middleware DISABLED: {e}"
+                );
+            }
+        }
+    } else {
+        info!("STITCHD_DATABASE_URL unset — idempotency middleware disabled");
+    }
 
     info!(%addr, %grpc_addr, "stitchd-gateway starting (REST + SDK gRPC)");
 

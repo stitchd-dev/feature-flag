@@ -32,10 +32,12 @@ use crate::state::GatewayState;
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct EventsQuery {
     pub env_id: String,
+    /// Opaque keyset cursor from a previous response; absent for the first page.
     #[serde(default)]
-    pub page: Option<u32>,
+    pub cursor: Option<String>,
+    /// Page size; defaults to 50, max 200.
     #[serde(default)]
-    pub per_page: Option<u32>,
+    pub limit: Option<u32>,
     #[serde(default)]
     pub include_archived: Option<bool>,
 }
@@ -102,9 +104,8 @@ pub struct EventJson {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ListEventsJson {
     pub items: Vec<EventJson>,
-    pub total: u64,
-    pub page: u32,
-    pub per_page: u32,
+    /// Opaque cursor for the next page; null when there are no more rows.
+    pub next_cursor: Option<String>,
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -159,8 +160,8 @@ fn map_tonic(e: tonic::Status) -> GatewayError {
     tag = "events",
     params(
         ("env_id" = String, Query, description = "Environment UUID"),
-        ("page" = Option<u32>, Query, description = "1-indexed page; defaults to 1"),
-        ("per_page" = Option<u32>, Query, description = "Page size; defaults to 50, max 200"),
+        ("cursor" = Option<String>, Query, description = "Opaque keyset cursor from a previous response"),
+        ("limit" = Option<u32>, Query, description = "Page size; defaults to 50, max 200"),
         ("include_archived" = Option<bool>, Query, description = "Include soft-deleted rows")
     ),
     responses(
@@ -173,15 +174,16 @@ pub async fn list_events(
     State(state): State<Arc<GatewayState>>,
     Query(q): Query<EventsQuery>,
 ) -> Result<Json<ListEventsJson>, GatewayError> {
-    let page = q.page.unwrap_or(1).max(1);
-    let per_page = q.per_page.unwrap_or(50).clamp(1, 200);
-    let offset = u64::from((page - 1) * per_page);
-    let limit = u64::from(per_page);
+    // Page size: default 50, capped at 200 (matches CursorParams::effective_limit).
+    let limit = match q.limit {
+        None | Some(0) => 50,
+        Some(n) => n.min(200),
+    };
 
     let proto_req = tonic::Request::new(ListEventDefinitionsRequest {
         environment_id: q.env_id,
-        offset: Some(offset),
-        limit: Some(limit),
+        cursor: q.cursor.unwrap_or_default(),
+        limit,
         include_archived: q.include_archived,
     });
     let mut client = state.analytics_client.lock().await;
@@ -192,9 +194,7 @@ pub async fn list_events(
         .into_inner();
     Ok(Json(ListEventsJson {
         items: resp.items.into_iter().map(proto_to_json).collect(),
-        total: resp.total,
-        page,
-        per_page,
+        next_cursor: (!resp.next_cursor.is_empty()).then_some(resp.next_cursor),
     }))
 }
 

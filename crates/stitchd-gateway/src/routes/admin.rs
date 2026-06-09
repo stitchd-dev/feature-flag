@@ -23,7 +23,7 @@ use stitchd_proto::management::v1::{
 };
 
 use crate::error::GatewayError;
-use crate::pagination::{PaginatedResponse, PaginationParams};
+use crate::pagination::{CursorPage, CursorParams};
 use crate::state::GatewayState;
 
 // ─── REST types ───────────────────────────────────────────────────────────────
@@ -32,7 +32,7 @@ use crate::state::GatewayState;
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct ListOrgUsersQuery {
     #[serde(flatten)]
-    pub pagination: PaginationParams,
+    pub cursor: CursorParams,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -203,8 +203,8 @@ pub async fn list_org_users(
     let resp = client
         .list_org_users(tonic::Request::new(ListOrgUsersRequest {
             org_id,
-            page: query.pagination.effective_page(),
-            per_page: query.pagination.effective_per_page(),
+            cursor: query.cursor.cursor.clone().unwrap_or_default(),
+            limit: query.cursor.effective_limit(),
         }))
         .await
         .map_err(GatewayError::from)?;
@@ -220,11 +220,7 @@ pub async fn list_org_users(
             created_at: u.created_at,
         })
         .collect();
-    Ok(Json(PaginatedResponse::new(
-        users,
-        inner.total,
-        &query.pagination,
-    )))
+    Ok(Json(CursorPage::from_token(users, inner.next_cursor)))
 }
 
 /// `GET /v1/superadmin/orgs`

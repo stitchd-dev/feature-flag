@@ -37,9 +37,6 @@ use stitchd_proto::analytics::v1::{
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-const MAX_LIMIT: u64 = 200;
-const DEFAULT_LIMIT: u64 = 50;
-
 fn parse_env_id(s: &str) -> Result<EnvironmentId, Status> {
     s.parse::<uuid::Uuid>()
         .map(EnvironmentId::from_uuid)
@@ -283,15 +280,12 @@ pub async fn handle_list_event_definitions(
 ) -> Result<Response<ListEventDefinitionsResponse>, Status> {
     let r = request.into_inner();
     let env_id = parse_env_id(&r.environment_id)?;
-    let offset = r.offset.unwrap_or(0);
-    let limit = r
-        .limit
-        .filter(|&l| l > 0)
-        .map(|l| l.min(MAX_LIMIT))
-        .unwrap_or(DEFAULT_LIMIT);
+    let after = stitchd_db::KeysetCursor::decode_opt(Some(&r.cursor))
+        .map_err(|_| Status::invalid_argument("invalid cursor"))?;
+    let limit = u64::from(stitchd_db::effective_limit(r.limit, 50, 200));
     let include_archived = r.include_archived.unwrap_or(false);
-    let (items, total) = repo
-        .list_by_environment_paginated(env_id, offset, limit, include_archived)
+    let (items, next_cursor) = repo
+        .list_by_environment_keyset(env_id, after, limit, include_archived)
         .await
         .map_err(map_repo_err)?;
 
@@ -312,9 +306,7 @@ pub async fn handle_list_event_definitions(
 
     Ok(Response::new(ListEventDefinitionsResponse {
         items: proto_items,
-        total,
-        offset,
-        limit,
+        next_cursor: next_cursor.unwrap_or_default(),
     }))
 }
 

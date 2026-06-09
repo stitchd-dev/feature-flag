@@ -448,6 +448,14 @@ impl EventBuffer {
             }
         };
 
+        // One stable idempotency key per batch, reused across every retry
+        // attempt of THIS batch. Combined with the identical `body`, the
+        // gateway's Idempotency-Key middleware makes our at-least-once retry
+        // loop exactly-once on the server: if an attempt succeeded server-side
+        // but its response was lost, the next attempt replays the stored 202
+        // rather than re-ingesting the events (no double-count).
+        let idempotency_key = uuid::Uuid::new_v4().to_string();
+
         let mut last_err: String = String::new();
         for attempt in 0..=self.inner.config.max_retries {
             if attempt > 0 {
@@ -461,6 +469,7 @@ impl EventBuffer {
                 .post(&self.inner.endpoint)
                 .header("x-sdk-key", &self.inner.config.sdk_key)
                 .header("content-type", "application/json")
+                .header("idempotency-key", &idempotency_key)
                 .body(body.clone())
                 .send()
                 .await;
@@ -1219,6 +1228,68 @@ mod tests {
             post,
             Some(0.0),
             "gauge should drop to 0 after flush; got {post:?}"
+        );
+        buffer.shutdown(Duration::from_millis(100)).await;
+    }
+
+    #[tokio::test]
+    async fn flush_sends_stable_idempotency_key_across_retries() {
+        // The Idempotency-Key header must be present and IDENTICAL on every
+        // retry of the same batch, so the gateway dedups a server-side success
+        // whose response was lost (platform_hardening_20260608, exactly-once).
+        let server = MockServer::start().await;
+        let keys = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+
+        struct CaptureKey {
+            keys: Arc<std::sync::Mutex<Vec<String>>>,
+            count: Arc<AtomicU32>,
+        }
+        impl Respond for CaptureKey {
+            fn respond(&self, req: &Request) -> ResponseTemplate {
+                let key = req
+                    .headers
+                    .get("idempotency-key")
+                    .map(|v| v.to_str().unwrap_or("").to_string())
+                    .unwrap_or_default();
+                self.keys.lock().unwrap().push(key);
+                let n = self.count.fetch_add(1, Ordering::SeqCst);
+                if n < 1 {
+                    ResponseTemplate::new(500)
+                } else {
+                    ResponseTemplate::new(202).set_body_json(serde_json::json!({
+                        "accepted_count": 1, "rejected": []
+                    }))
+                }
+            }
+        }
+
+        Mock::given(method("POST"))
+            .and(path("/v1/events/track"))
+            .respond_with(CaptureKey {
+                keys: Arc::clone(&keys),
+                count: Arc::new(AtomicU32::new(0)),
+            })
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let cfg = EventBufferConfig {
+            backoff_base: Duration::from_millis(1),
+            ..config_for(&server)
+        };
+        let buffer = EventBuffer::new(cfg);
+        buffer.enqueue(ev("k0"));
+        buffer.flush().await.expect("flush should succeed on retry");
+
+        let captured = { keys.lock().unwrap().clone() };
+        assert_eq!(captured.len(), 2, "one failed attempt + one retry");
+        assert!(
+            !captured[0].is_empty(),
+            "idempotency-key header must be present"
+        );
+        assert_eq!(
+            captured[0], captured[1],
+            "the same batch must reuse the same idempotency key across retries"
         );
         buffer.shutdown(Duration::from_millis(100)).await;
     }

@@ -28,7 +28,7 @@ use stitchd_proto::experiments::v1::{
 };
 
 use crate::error::GatewayError;
-use crate::pagination::{PaginatedResponse, PaginationParams};
+use crate::pagination::{CursorPage, CursorParams};
 use crate::routes::experiments::ExperimentJson;
 use crate::state::GatewayState;
 
@@ -38,7 +38,7 @@ use crate::state::GatewayState;
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct ListExclusionGroupsQuery {
     #[serde(flatten)]
-    pub pagination: PaginationParams,
+    pub cursor: CursorParams,
 }
 
 /// Request body for `POST /exclusion-groups`.
@@ -118,11 +118,11 @@ fn exclusion_group_to_json(g: &ExclusionGroup) -> ExclusionGroupJson {
     tag = "exclusion-groups",
     params(
         ("environment_id" = String, Path, description = "Environment ID"),
-        ("page" = Option<u32>, Query, description = "1-based page number"),
-        ("per_page" = Option<u32>, Query, description = "Page size (default 50, max 200)"),
+        ("cursor" = Option<String>, Query, description = "Opaque pagination cursor from a previous response"),
+        ("limit" = Option<u32>, Query, description = "Page size (default 50, max 200)"),
     ),
     responses(
-        (status = 200, description = "Paginated list of exclusion groups"),
+        (status = 200, description = "Cursor-paginated list of exclusion groups"),
         (status = 401, description = "Unauthorized"),
         (status = 502, description = "Experimentation service unavailable"),
     ),
@@ -135,8 +135,8 @@ pub async fn list_exclusion_groups(
 ) -> Result<impl IntoResponse, GatewayError> {
     let req = tonic::Request::new(ListExclusionGroupsRequest {
         env_id: environment_id,
-        page: query.pagination.effective_page(),
-        per_page: query.pagination.effective_per_page(),
+        cursor: query.cursor.cursor.clone().unwrap_or_default(),
+        limit: query.cursor.effective_limit(),
     });
     let mut client = state.experimentation_client.lock().await;
     let resp = client
@@ -146,11 +146,7 @@ pub async fn list_exclusion_groups(
     let inner = resp.into_inner();
     let groups: Vec<ExclusionGroupJson> =
         inner.groups.iter().map(exclusion_group_to_json).collect();
-    Ok(Json(PaginatedResponse::new(
-        groups,
-        inner.total,
-        &query.pagination,
-    )))
+    Ok(Json(CursorPage::from_token(groups, inner.next_cursor)))
 }
 
 /// `POST /v1/environments/{environment_id}/exclusion-groups`

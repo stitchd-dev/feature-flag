@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM idempotency_keys\n             WHERE scope = $1 AND idempotency_key = $2 AND response_status IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "05efcbb12e705b8b439447a5c685d693919636ce2839e75487b73409c5a9f3c4"
+}

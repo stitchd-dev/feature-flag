@@ -1053,17 +1053,13 @@ impl ExperimentationService for ExperimentationServiceImpl {
             .map_err(|_| Status::invalid_argument("invalid environment_id UUID"))?;
         let env_id = EnvironmentId::from_uuid(env_uuid);
 
-        let page = if req.page == 0 { 1u64 } else { req.page as u64 };
-        let per_page = if req.per_page == 0 {
-            50u64
-        } else {
-            (req.per_page as u64).min(200)
-        };
-        let offset = (page - 1) * per_page;
+        let after = stitchd_db::KeysetCursor::decode_opt(Some(&req.cursor))
+            .map_err(|_| Status::invalid_argument("invalid cursor"))?;
+        let limit = stitchd_db::effective_limit(req.limit, 50, 200) as u64;
 
-        let (experiments, total) = self
+        let (experiments, next_cursor) = self
             .experiment_repo
-            .list_by_environment_paginated(env_id, offset, per_page)
+            .list_by_environment_keyset(env_id, after, limit)
             .await
             .map_err(Status::from)?;
 
@@ -1071,7 +1067,7 @@ impl ExperimentationService for ExperimentationServiceImpl {
         metrics::counter!("experimentation_service.list_experiments.ok").increment(1);
         Ok(Response::new(ListExperimentsResponse {
             experiments: protos,
-            total,
+            next_cursor: next_cursor.unwrap_or_default(),
         }))
     }
 
@@ -2096,18 +2092,21 @@ impl ExperimentationService for ExperimentationServiceImpl {
         let req = request.into_inner();
         let env_id = parse_env_id(&req.env_id)?;
 
-        let groups = repo
-            .list_by_environment(env_id)
+        let after = stitchd_db::KeysetCursor::decode_opt(Some(&req.cursor))
+            .map_err(|_| Status::invalid_argument("invalid cursor"))?;
+        let limit = stitchd_db::effective_limit(req.limit, 50, 200) as u64;
+
+        let (groups, next_cursor) = repo
+            .list_by_environment_keyset(env_id, after, limit)
             .await
             .map_err(Status::from)?;
-        let total = groups.len() as u64;
         let proto_groups = groups.iter().map(group_to_proto).collect();
 
         metrics::counter!("experimentation_service.list_exclusion_groups.ok").increment(1);
         Ok(Response::new(
             stitchd_proto::experiments::v1::ListExclusionGroupsResponse {
                 groups: proto_groups,
-                total,
+                next_cursor: next_cursor.unwrap_or_default(),
             },
         ))
     }
@@ -3020,14 +3019,14 @@ mod tests {
             Ok(vec![make_experiment(self.env_id)])
         }
 
-        async fn list_by_environment_paginated(
+        async fn list_by_environment_keyset(
             &self,
             _env_id: EnvironmentId,
-            _offset: u64,
+            _after: Option<stitchd_db::KeysetCursor>,
             _limit: u64,
-        ) -> Result<(Vec<Experiment>, u64), RepositoryError> {
+        ) -> Result<(Vec<Experiment>, Option<String>), RepositoryError> {
             let exp = make_experiment(self.env_id);
-            Ok((vec![exp], 1))
+            Ok((vec![exp], None))
         }
 
         async fn create(&self, _experiment: &Experiment) -> Result<(), RepositoryError> {
@@ -3123,12 +3122,12 @@ mod tests {
             })
         }
 
-        async fn list_by_environment_paginated(
+        async fn list_by_environment_keyset(
             &self,
             env_id: EnvironmentId,
-            _offset: u64,
+            _after: Option<stitchd_db::KeysetCursor>,
             _limit: u64,
-        ) -> Result<(Vec<Experiment>, u64), RepositoryError> {
+        ) -> Result<(Vec<Experiment>, Option<String>), RepositoryError> {
             Err(RepositoryError::NotFound {
                 id: env_id.to_string(),
             })
@@ -4348,15 +4347,15 @@ mod tests {
             Ok(vec![exp])
         }
 
-        async fn list_by_environment_paginated(
+        async fn list_by_environment_keyset(
             &self,
             _env_id: EnvironmentId,
-            _offset: u64,
+            _after: Option<stitchd_db::KeysetCursor>,
             _limit: u64,
-        ) -> Result<(Vec<Experiment>, u64), RepositoryError> {
+        ) -> Result<(Vec<Experiment>, Option<String>), RepositoryError> {
             let mut exp = make_experiment(self.env_id);
             exp.status = ExperimentStatus::Running;
-            Ok((vec![exp], 1))
+            Ok((vec![exp], None))
         }
 
         async fn create(&self, _experiment: &Experiment) -> Result<(), RepositoryError> {
@@ -5594,6 +5593,14 @@ mod tests {
         ) -> Result<Vec<ExclusionGroup>, RepositoryError> {
             Ok(vec![sample_group(&self.salt)])
         }
+        async fn list_by_environment_keyset(
+            &self,
+            _env_id: EnvironmentId,
+            _after: Option<stitchd_db::KeysetCursor>,
+            _limit: u64,
+        ) -> Result<(Vec<ExclusionGroup>, Option<String>), RepositoryError> {
+            Ok((vec![sample_group(&self.salt)], None))
+        }
         async fn create(
             &self,
             env_id: EnvironmentId,
@@ -5679,6 +5686,14 @@ mod tests {
         ) -> Result<Vec<ExclusionGroup>, RepositoryError> {
             Ok(vec![])
         }
+        async fn list_by_environment_keyset(
+            &self,
+            _env_id: EnvironmentId,
+            _after: Option<stitchd_db::KeysetCursor>,
+            _limit: u64,
+        ) -> Result<(Vec<ExclusionGroup>, Option<String>), RepositoryError> {
+            Ok((vec![], None))
+        }
         async fn create(
             &self,
             _env_id: EnvironmentId,
@@ -5760,13 +5775,13 @@ mod tests {
         ) -> Result<Vec<Experiment>, RepositoryError> {
             Ok(vec![])
         }
-        async fn list_by_environment_paginated(
+        async fn list_by_environment_keyset(
             &self,
             _env_id: EnvironmentId,
-            _offset: u64,
+            _after: Option<stitchd_db::KeysetCursor>,
             _limit: u64,
-        ) -> Result<(Vec<Experiment>, u64), RepositoryError> {
-            Ok((vec![], 0))
+        ) -> Result<(Vec<Experiment>, Option<String>), RepositoryError> {
+            Ok((vec![], None))
         }
         async fn create(&self, _experiment: &Experiment) -> Result<(), RepositoryError> {
             Ok(())
@@ -5864,15 +5879,15 @@ mod tests {
         let list_req =
             tonic::Request::new(stitchd_proto::experiments::v1::ListExclusionGroupsRequest {
                 env_id: env_str,
-                page: 0,
-                per_page: 0,
+                cursor: String::new(),
+                limit: 0,
             });
         let listed = svc
             .list_exclusion_groups(list_req)
             .await
             .unwrap()
             .into_inner();
-        assert_eq!(listed.total, 1);
+        assert_eq!(listed.groups.len(), 1);
     }
 
     #[tokio::test]
@@ -6018,6 +6033,14 @@ mod tests {
         ) -> Result<Vec<ExclusionGroup>, RepositoryError> {
             Ok(vec![])
         }
+        async fn list_by_environment_keyset(
+            &self,
+            _env_id: EnvironmentId,
+            _after: Option<stitchd_db::KeysetCursor>,
+            _limit: u64,
+        ) -> Result<(Vec<ExclusionGroup>, Option<String>), RepositoryError> {
+            Ok((vec![], None))
+        }
         async fn create(
             &self,
             _env_id: EnvironmentId,
@@ -6121,13 +6144,13 @@ mod tests {
             ) -> Result<Vec<Experiment>, RepositoryError> {
                 Ok(vec![])
             }
-            async fn list_by_environment_paginated(
+            async fn list_by_environment_keyset(
                 &self,
                 _env_id: EnvironmentId,
-                _offset: u64,
+                _after: Option<stitchd_db::KeysetCursor>,
                 _limit: u64,
-            ) -> Result<(Vec<Experiment>, u64), RepositoryError> {
-                Ok((vec![], 0))
+            ) -> Result<(Vec<Experiment>, Option<String>), RepositoryError> {
+                Ok((vec![], None))
             }
             async fn create(&self, _experiment: &Experiment) -> Result<(), RepositoryError> {
                 Ok(())
@@ -6236,6 +6259,14 @@ mod tests {
                 _env_id: EnvironmentId,
             ) -> Result<Vec<ExclusionGroup>, RepositoryError> {
                 Ok(vec![])
+            }
+            async fn list_by_environment_keyset(
+                &self,
+                _env_id: EnvironmentId,
+                _after: Option<stitchd_db::KeysetCursor>,
+                _limit: u64,
+            ) -> Result<(Vec<ExclusionGroup>, Option<String>), RepositoryError> {
+                Ok((vec![], None))
             }
             async fn create(
                 &self,
@@ -6636,13 +6667,13 @@ mod tests {
         ) -> Result<Vec<Experiment>, RepositoryError> {
             Ok(vec![])
         }
-        async fn list_by_environment_paginated(
+        async fn list_by_environment_keyset(
             &self,
             _env_id: EnvironmentId,
-            _offset: u64,
+            _after: Option<stitchd_db::KeysetCursor>,
             _limit: u64,
-        ) -> Result<(Vec<Experiment>, u64), RepositoryError> {
-            Ok((vec![], 0))
+        ) -> Result<(Vec<Experiment>, Option<String>), RepositoryError> {
+            Ok((vec![], None))
         }
         async fn create(&self, _experiment: &Experiment) -> Result<(), RepositoryError> {
             Ok(())

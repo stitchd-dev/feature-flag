@@ -244,44 +244,57 @@ impl MetricRepository for PgMetricRepository {
         Ok(metrics)
     }
 
-    async fn list_by_environment_paginated(
+    async fn list_by_environment_keyset(
         &self,
         environment_id: EnvironmentId,
-        offset: u64,
+        after: Option<crate::KeysetCursor>,
         limit: u64,
-    ) -> Result<(Vec<MetricDefinition>, u64), RepositoryError> {
-        // Use COUNT(*) OVER() to return total alongside each row, matching
-        // the pattern from `db_optim_20260516`.
+    ) -> Result<(Vec<MetricDefinition>, Option<String>), RepositoryError> {
+        // Keyset pagination ordered by (created_at, id): fetch limit+1 rows; the
+        // surplus row signals a next page. The row-value comparison
+        // `(created_at, id) > ($cursor_created_at, $cursor_id)` resumes strictly
+        // after the prior page's last row. A NULL cursor (first page) admits all.
         let rows = sqlx::query(
             r"
             SELECT id, environment_id, key, name, description,
                    kind, config, goal_direction,
-                   version, created_at, updated_at, deleted_at,
-                   COUNT(*) OVER() AS total_count
+                   version, created_at, updated_at, deleted_at
             FROM metric_definitions
             WHERE environment_id = $1 AND deleted_at IS NULL
-            ORDER BY created_at
-            OFFSET $2 LIMIT $3
+              AND ($2::timestamptz IS NULL OR (created_at, id) > ($2, $3))
+            ORDER BY created_at, id
+            LIMIT $4
             ",
         )
         .bind(environment_id.as_uuid())
-        .bind(i64::try_from(offset).unwrap_or(i64::MAX))
-        .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+        .bind(after.map(|c| c.created_at))
+        .bind(after.map(|c| c.id))
+        .bind(i64::try_from(limit + 1).unwrap_or(i64::MAX))
         .fetch_all(&self.pool)
         .await
         .map_err(RepositoryError::Database)?;
 
-        if rows.is_empty() {
-            return Ok((Vec::new(), 0));
-        }
-        let total: i64 = rows[0]
-            .try_get("total_count")
-            .map_err(RepositoryError::Database)?;
         let mut metrics = Vec::with_capacity(rows.len());
-        for row in rows {
-            metrics.push(row_to_metric(&row)?);
+        for row in &rows {
+            metrics.push(row_to_metric(row)?);
         }
-        Ok((metrics, u64::try_from(total).unwrap_or(0)))
+
+        // limit+1 rows ⇒ more pages: drop the surplus and encode the new last
+        // row's keyset as the next cursor.
+        let next_cursor = if metrics.len() as u64 > limit {
+            metrics.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+            metrics.last().map(|m| {
+                crate::KeysetCursor {
+                    created_at: m.created_at,
+                    id: m.id.as_uuid(),
+                }
+                .encode()
+            })
+        } else {
+            None
+        };
+
+        Ok((metrics, next_cursor))
     }
 
     async fn list_referencing_event(

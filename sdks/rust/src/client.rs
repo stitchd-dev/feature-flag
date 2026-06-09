@@ -392,12 +392,24 @@ impl EventSink for HttpEventSink {
             .collect();
 
         let body = EventBatchBody { events: items };
+        // Serialize once so we can both send the bytes and derive a stable,
+        // content-addressed idempotency key. A re-sent identical batch hashes to
+        // the same key, so the gateway's Idempotency-Key middleware replays the
+        // stored 202 instead of re-ingesting it (deduping at-least-once retries).
+        // (Content-derived rather than random because this sink's FlushTask may
+        // re-enqueue a failed batch; a content hash stays stable across that.)
+        let body_bytes = serde_json::to_vec(&body)
+            .map_err(|e| SdkError::Network(format!("event flush: {e}")))?;
+        let idempotency_key =
+            uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, &body_bytes).to_string();
 
         let resp = self
             .client
             .post(&self.endpoint)
             .header("x-sdk-key", &self.sdk_key)
-            .json(&body)
+            .header("idempotency-key", &idempotency_key)
+            .header("content-type", "application/json")
+            .body(body_bytes)
             .send()
             .await
             .map_err(|e| SdkError::Network(format!("event flush: {e}")))?;

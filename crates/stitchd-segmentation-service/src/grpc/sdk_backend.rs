@@ -207,12 +207,12 @@ mod tests {
         ) -> Result<Vec<Segment>, RepositoryError> {
             unimplemented!()
         }
-        async fn list_by_environment_paginated(
+        async fn list_by_environment_keyset(
             &self,
             _env: EnvironmentId,
-            _offset: u64,
+            _after: Option<stitchd_db::KeysetCursor>,
             _limit: u64,
-        ) -> Result<(Vec<Segment>, u64), RepositoryError> {
+        ) -> Result<(Vec<Segment>, Option<String>), RepositoryError> {
             unimplemented!()
         }
         async fn create(&self, _s: &Segment) -> Result<(), RepositoryError> {

@@ -4,7 +4,7 @@
  * Lists env-scoped event definitions registered via the `CreateEventModal`.
  * Filters: search-by-key/name, metric_type chip-bar, status (active /
  * archived / all). Pagination is URL-driven via `usePaginatedList`
- * (?page=N). Click row → `/org/:orgId/events/:eventKey` (detail page lands
+ * (?cursor=<opaque>). Click row → `/org/:orgId/events/:eventKey` (detail page lands
  * in Task 6.2 — for now navigation just changes the URL).
  *
  * Pure logic (filters / pagination math / modal state machine) lives in
@@ -13,7 +13,7 @@
  * shaped HTML, `<Pagination>`, `<EmptyState>`, `<LoadingSpinner>`,
  * `<ErrorBanner>`).
  *
- * Wire-up: GET `/v1/events` returns a `PaginatedResponse<EventDefinitionListItem>`.
+ * Wire-up: GET `/v1/events` returns a `CursorPage<EventDefinitionListItem>`.
  * `last_fired_at` and `count_24h` come from the analytics-service summary
  * endpoint (Phase 6 Task 5 — surfaced as `null` here until that ships).
  */
@@ -28,7 +28,7 @@ import { EmptyState } from '../../components/EmptyState'
 import { usePaginatedList } from '../../hooks/usePaginatedList'
 import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
-import type { PaginatedResponse } from '../../lib/types'
+import type { CursorPage } from '../../lib/types'
 import { CreateEventModal } from './CreateEventModal'
 
 const PER_PAGE = 50
@@ -71,21 +71,22 @@ export function EventsList() {
   const [status, setStatus] = useState<StatusFilter>('active')
   const [showCreate, setShowCreate] = useState(false)
 
-  const { data: events, total, loading, error, page, onPageChange, refresh } = usePaginatedList<EventDefinitionListItem>(
-    async ({ page: p, perPage, signal }) => {
-      const qs = new URLSearchParams({ page: String(p), per_page: String(perPage) })
+  const { data: events, loading, error, hasNext, hasPrev, onNext, onPrev, refresh } = usePaginatedList<EventDefinitionListItem>(
+    async ({ cursor, limit, signal }) => {
+      const qs = new URLSearchParams({ limit: String(limit) })
+      if (cursor != null) qs.set('cursor', cursor)
       // env_id is required by the gateway (`/v1/events?env_id=...`) —
       // mirrors the `/v1/metrics` pattern; admin JWTs are org-scoped, not
       // env-scoped, so we surface the EnvSwitcher selection here.
       if (envId) qs.set('env_id', envId)
       if (status === 'archived') qs.set('include_archived', 'true')
       if (status === 'all') qs.set('include_archived', 'true')
-      const { data } = await api.get<PaginatedResponse<EventDefinitionListItem>>(
+      const { data } = await api.get<CursorPage<EventDefinitionListItem>>(
         `/v1/events?${qs}`,
         { signal },
       )
       const items = data.items ?? (Array.isArray(data) ? data : [])
-      return { items, total: data.total ?? items.length }
+      return { items, next_cursor: data.next_cursor ?? null }
     },
     [status, envId],
     PER_PAGE,
@@ -109,7 +110,7 @@ export function EventsList() {
       <PageHeader
         crumbs={['Events']}
         title="Events"
-        subtitle={`${total} event${total === 1 ? '' : 's'}. Unknown event keys are rejected at the gateway.`}
+        subtitle="Unknown event keys are rejected at the gateway."
         actions={
           <button className="btn primary" onClick={() => setShowCreate(true)}>
             <I.plus size={14} /> New event
@@ -226,7 +227,7 @@ export function EventsList() {
                     </tbody>
                   </table>
                 </div>
-                <Pagination page={page} perPage={PER_PAGE} total={total} onChange={onPageChange} />
+                <Pagination hasPrev={hasPrev} hasNext={hasNext} onPrev={onPrev} onNext={onNext} />
               </div>
             )}
           </>

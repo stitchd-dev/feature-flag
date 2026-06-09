@@ -355,6 +355,28 @@ The experimentation-service proto gained additive RPCs (`CreateExclusionGroup`/`
 - **`flags.v1` (`flag_service.proto`):** `SetPrerequisites` / `GetPrerequisites` RPCs + request/response messages.
 - **No new proto error enum.** Referential-integrity 409s use the `dependency_exists:<ids>` status-message sentinel (mirroring `flag_locked_by_experiment:`) decoded source-agnostically in the gateway — same convention as the existing flag-lock sentinel; no proto change. Experiment/segment scheduling reuse existing `TransitionExperiment` / `UpdateAdminSegment` RPCs.
 
+**`platform_hardening_20260608` change — gateway gains a narrowly-scoped `PgPool` for Idempotency-Key middleware:**
+- Historically the gateway held **zero** database access — a pure REST↔gRPC translator (`domain_boundaries_20260530`). This track adds a single, narrowly-scoped `PgPool` to the gateway **solely** for HTTP-edge cross-cutting state: the `idempotency_keys` table (migration `20260608000003_idempotency_keys.sql`). This is **not** a domain-logic regression — idempotency is request dedup at the edge (the same class of cross-cutting concern as the existing in-memory rate-limit/quota and tracing), it just needs durable, cross-replica state. The gateway issues NO domain queries; the only table it touches is `idempotency_keys`.
+- The pool connects to `STITCHD_DATABASE_URL`. If that env var is **unset**, idempotency middleware is **disabled** (the gateway logs a warning and runs without it) — keeping the gateway runnable in deployments that don't provision it a DB, and preserving backward compatibility.
+- TTL is configured by `STITCHD_GATEWAY_IDEMPOTENCY_TTL_SECS` (default 86400 = 24h); a gateway tokio interval task sweeps expired rows. Applies to all mutating methods (POST/PUT/PATCH/DELETE) when an `Idempotency-Key` header is present; a replay returns the stored 2xx with an `Idempotent-Replayed: true` header, key-reuse with a different request fingerprint returns `422 idempotency_key_reuse`, and a store error fails **open** (request proceeds unprotected rather than 500ing).
+- Deviation from the spec's `response_body jsonb`: stored as **BYTEA + content-type** so any 2xx payload replays byte-for-byte regardless of content type (more robust than JSONB, which would reject non-JSON bodies).
+
+**`platform_hardening_20260608` — cursor-based pagination contract (Phase 4):**
+This **reverses** the page-based canonical contract `domain_boundaries_20260530` established (`PaginatedResponse<T>` = `{items, total, page, per_page}`, `?page=N&per_page=M`). The cursor contract — mandated by `product-guidelines.md` ("All list endpoints use cursor-based pagination") — is:
+- **Request:** `?cursor=<opaque>&limit=N` (`cursor` absent → first page; `limit` defaults to 50, capped at 200).
+- **Response:** `{ items: [...], next_cursor: <opaque|null> }` — `next_cursor` is `null` on the last page. No `total` (keyset pagination cannot cheaply produce a total without the `COUNT(*) OVER()` second-column the OFFSET path used).
+- **Opaque token:** base64url(JSON({created_at, id})) — the keyset position of the page's last row. Clients treat it as opaque and never construct it. The format is owned by `stitchd_db::KeysetCursor` (next to the SQL); the gateway forwards it untouched.
+- **Implemented as true keyset (post-`feature-flag-cj5`).** Every top-level list orders by `(created_at, id)`. Each owning service's repo runs the keyset query
+  ```sql
+  WHERE <scope> = $1 AND deleted_at IS NULL
+    AND ($cursor IS NULL OR (created_at, id) > ($cursor_created_at, $cursor_id))
+  ORDER BY created_at, id LIMIT $limit + 1
+  ```
+  fetching `limit + 1` rows (the surplus row ⇒ a next page, encoded as the new last row's keyset), and **no `COUNT(*) OVER()`**. The proto list RPCs carry `cursor` + `limit` (request) and `next_cursor` (response); the gateway forwards the opaque cursor through and returns `CursorPage::from_token(items, next_cursor)`. This is O(1) per page (no deep-`OFFSET` scan) and stable under concurrent inserts. Shared primitives: `stitchd_db::KeysetCursor`/`effective_limit` (repos) + `gateway::pagination::{CursorParams, CursorPage, encode_cursor, decode_cursor}`.
+- **Migrated entities (8):** flags, experiments, segments, events, metrics, sdk-keys, org-users, exclusion-groups. Each repo's `list_*_paginated` (`OFFSET`) was replaced by `list_*_keyset`; the change is verified per entity by a multi-page correctness test (seed ~23 rows, page through, assert every row visited exactly once with no gaps/dupes). Most entities keyset on `(created_at, id)`; **`org-users` keysets on `(email, id)`** (via `stitchd_db::EmailKeysetCursor`) to **preserve its alphabetical-by-email order** — email is globally unique, so it is a stable keyset. No user-visible ordering changed.
+- **Trade-off accepted:** the Admin UI moves from numbered pages to next/prev navigation (cursors are opaque; no random page-number access), matching the guidelines. The REST contract (`?cursor=&limit=` → `{items, next_cursor}`) was **unchanged** by the keyset cutover — only the opaque token's internal payload changed (offset → keyset), so the Admin UI required no changes.
+- **Internal "list-all" consumers** that previously fetched an unbounded list (e.g. the gateway dependency-graph) now page through the cursor (limit 200) until exhausted, since the keyset cutover removed the unbounded mode.
+
 ## Infrastructure (Self-Hosted)
 - PostgreSQL 16+ for configuration, tenants, RBAC, audit logs, auth, experiments
 - ClickHouse 24+ for events, experiment data, metric aggregations

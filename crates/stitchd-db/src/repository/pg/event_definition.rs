@@ -185,43 +185,60 @@ impl EventDefinitionRepository for PgEventDefinitionRepository {
         Ok(out)
     }
 
-    async fn list_by_environment_paginated(
+    async fn list_by_environment_keyset(
         &self,
         environment_id: EnvironmentId,
-        offset: u64,
+        after: Option<crate::KeysetCursor>,
         limit: u64,
         include_archived: bool,
-    ) -> Result<(Vec<EventDefinition>, u64), RepositoryError> {
-        let where_clause = if include_archived {
-            "WHERE environment_id = $1"
+    ) -> Result<(Vec<EventDefinition>, Option<String>), RepositoryError> {
+        // Keyset pagination ordered by (created_at, id): fetch limit+1 rows; the
+        // surplus row signals a next page. The row-value comparison
+        // `(created_at, id) > ($cursor_created_at, $cursor_id)` resumes strictly
+        // after the prior page's last row. A NULL cursor (first page) admits all.
+        let archived_filter = if include_archived {
+            ""
         } else {
-            "WHERE environment_id = $1 AND deleted_at IS NULL"
+            "AND deleted_at IS NULL"
         };
         let sql = format!(
-            "SELECT {SELECT_COLS}, COUNT(*) OVER() AS total_count \
-             FROM event_definitions {where_clause} \
-             ORDER BY created_at \
-             OFFSET $2 LIMIT $3"
+            "SELECT {SELECT_COLS} \
+             FROM event_definitions \
+             WHERE environment_id = $1 {archived_filter} \
+               AND ($2::timestamptz IS NULL OR (created_at, id) > ($2, $3)) \
+             ORDER BY created_at, id \
+             LIMIT $4"
         );
         let rows = sqlx::query(&sql)
             .bind(environment_id.as_uuid())
-            .bind(i64::try_from(offset).unwrap_or(i64::MAX))
-            .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+            .bind(after.map(|c| c.created_at))
+            .bind(after.map(|c| c.id))
+            .bind(i64::try_from(limit + 1).unwrap_or(i64::MAX))
             .fetch_all(&self.pool)
             .await
             .map_err(RepositoryError::Database)?;
 
-        if rows.is_empty() {
-            return Ok((Vec::new(), 0));
-        }
-        let total: i64 = rows[0]
-            .try_get("total_count")
-            .map_err(RepositoryError::Database)?;
         let mut out = Vec::with_capacity(rows.len());
-        for row in rows {
-            out.push(row_to_event_definition(&row)?);
+        for row in &rows {
+            out.push(row_to_event_definition(row)?);
         }
-        Ok((out, u64::try_from(total).unwrap_or(0)))
+
+        // limit+1 rows ⇒ more pages: drop the surplus and encode the new last
+        // row's keyset as the next cursor.
+        let next_cursor = if out.len() as u64 > limit {
+            out.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+            out.last().map(|d| {
+                crate::KeysetCursor {
+                    created_at: d.created_at,
+                    id: d.id.as_uuid(),
+                }
+                .encode()
+            })
+        } else {
+            None
+        };
+
+        Ok((out, next_cursor))
     }
 
     async fn create(&self, def: &EventDefinition) -> Result<(), RepositoryError> {

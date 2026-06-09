@@ -180,6 +180,13 @@ cargo sqlx migrate run --source crates/stitchd-db/migrations
 # sqlx-cli requires plain DATABASE_URL (not STITCHD_DATABASE_URL)
 # Always alias before running sqlx commands:
 # export DATABASE_URL="$STITCHD_DATABASE_URL"
+
+# If the dev DB has DRIFTED from the branch migrations (a "different checksum"
+# on an applied migration makes `sqlx migrate run` halt with later migrations
+# pending), reset it to CI's fresh-from-scratch state — drop+recreate+migrate
+# from the V1 baseline (non-interactive, idempotent):
+scripts/reset_dev_db.sh          # Postgres only (the common case)
+scripts/reset_dev_db.sh --all    # + ClickHouse (SYNC drop + Keeper sweep) + ScyllaDB
 ```
 
 ### Daily Development

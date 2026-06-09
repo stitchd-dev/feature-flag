@@ -144,6 +144,36 @@ pub async fn get_dependencies(
 }
 
 /// Build the dependency graph for a flag.
+/// Fetch EVERY non-archived flag in a project by paging through the
+/// cursor-paginated admin list (the dependency graph needs the full set).
+async fn list_all_project_flags(
+    state: &Arc<GatewayState>,
+    project_id: &str,
+) -> Result<Vec<stitchd_proto::flags::v1::FeatureFlag>, GatewayError> {
+    let mut client = state.flag_client.lock().await;
+    let mut acc = Vec::new();
+    let mut cursor = String::new();
+    loop {
+        let resp = client
+            .list_flags(tonic::Request::new(ListFlagsRequest {
+                environment_id: String::new(),
+                include_archived: false,
+                project_id: project_id.to_string(),
+                cursor: cursor.clone(),
+                limit: 200,
+            }))
+            .await
+            .map_err(GatewayError::from)?
+            .into_inner();
+        acc.extend(resp.flags);
+        if resp.next_cursor.is_empty() {
+            break;
+        }
+        cursor = resp.next_cursor;
+    }
+    Ok(acc)
+}
+
 async fn flag_dependencies(
     state: &Arc<GatewayState>,
     project_id: &str,
@@ -188,21 +218,7 @@ async fn flag_dependencies(
     }
 
     // ── Downstream: flags that list this flag as a prerequisite.
-    let all_flags = {
-        let mut client = state.flag_client.lock().await;
-        client
-            .list_flags(tonic::Request::new(ListFlagsRequest {
-                environment_id: String::new(),
-                include_archived: false,
-                project_id: project_id.to_string(),
-                page: 0,
-                per_page: 0,
-            }))
-            .await
-            .map_err(GatewayError::from)?
-            .into_inner()
-            .flags
-    };
+    let all_flags = list_all_project_flags(state, project_id).await?;
     let mut downstream: Vec<DependencyEdge> = Vec::new();
     for f in &all_flags {
         if f.key == flag_key {
@@ -238,21 +254,7 @@ async fn segment_dependencies(
     project_id: &str,
     segment_id: &str,
 ) -> Result<Json<DependencyGraphJson>, GatewayError> {
-    let all_flags = {
-        let mut client = state.flag_client.lock().await;
-        client
-            .list_flags(tonic::Request::new(ListFlagsRequest {
-                environment_id: String::new(),
-                include_archived: false,
-                project_id: project_id.to_string(),
-                page: 0,
-                per_page: 0,
-            }))
-            .await
-            .map_err(GatewayError::from)?
-            .into_inner()
-            .flags
-    };
+    let all_flags = list_all_project_flags(state, project_id).await?;
 
     let mut downstream: Vec<DependencyEdge> = Vec::new();
     for f in &all_flags {

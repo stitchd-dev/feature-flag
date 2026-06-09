@@ -1,121 +1,99 @@
-import { describe, it, expect } from 'vitest'
+/**
+ * Pagination — cursor-navigation logic tests (pure, no DOM).
+ *
+ * The component now renders only Previous / Next buttons driven by
+ * `hasPrev` / `hasNext`; there are no page numbers and no total count.
+ * It hides entirely when neither direction is navigable.
+ */
+import { describe, it, expect, vi } from 'vitest'
 
-// ── Logic mirrored from Pagination component ──────────────────────────────────
+// ── Logic mirrored from the Pagination component ──────────────────────────────
 
 interface PaginationState {
-  page: number
-  perPage: number
-  total: number
+  hasPrev: boolean
+  hasNext: boolean
 }
 
-function totalPages({ perPage, total }: PaginationState): number {
-  return Math.max(1, Math.ceil(total / perPage))
+/** Mirrors `if (!hasPrev && !hasNext) return null` — true means the control is hidden. */
+function isHidden({ hasPrev, hasNext }: PaginationState): boolean {
+  return !hasPrev && !hasNext
 }
 
-function isFirst({ page }: PaginationState): boolean {
-  return page <= 1
+/** Whether the Previous button is disabled (mirrors `disabled={!hasPrev}`). */
+function prevDisabled({ hasPrev }: PaginationState): boolean {
+  return !hasPrev
 }
 
-function isLast(state: PaginationState): boolean {
-  return state.page >= totalPages(state)
-}
-
-function from({ page, perPage, total }: PaginationState): number {
-  return Math.min((page - 1) * perPage + 1, total)
-}
-
-function to({ page, perPage, total }: PaginationState): number {
-  return Math.min(page * perPage, total)
+/** Whether the Next button is disabled (mirrors `disabled={!hasNext}`). */
+function nextDisabled({ hasNext }: PaginationState): boolean {
+  return !hasNext
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-describe('Pagination logic', () => {
-  describe('totalPages', () => {
-    it('rounds up to next page', () => {
-      expect(totalPages({ page: 1, perPage: 10, total: 25 })).toBe(3)
-    })
-
-    it('is exactly N when total is divisible by perPage', () => {
-      expect(totalPages({ page: 1, perPage: 10, total: 30 })).toBe(3)
-    })
-
-    it('returns 1 for empty total', () => {
-      expect(totalPages({ page: 1, perPage: 50, total: 0 })).toBe(1)
-    })
+describe('Pagination visibility', () => {
+  it('hidden when neither prev nor next are navigable (single page)', () => {
+    expect(isHidden({ hasPrev: false, hasNext: false })).toBe(true)
   })
 
-  describe('isFirst / isLast (disabled states)', () => {
-    it('prev is disabled on page 1', () => {
-      expect(isFirst({ page: 1, perPage: 10, total: 30 })).toBe(true)
-    })
-
-    it('prev is enabled on page 2', () => {
-      expect(isFirst({ page: 2, perPage: 10, total: 30 })).toBe(false)
-    })
-
-    it('next is disabled on last page', () => {
-      expect(isLast({ page: 3, perPage: 10, total: 30 })).toBe(true)
-    })
-
-    it('next is enabled on non-last page', () => {
-      expect(isLast({ page: 2, perPage: 10, total: 30 })).toBe(false)
-    })
-
-    it('both disabled when single page', () => {
-      const state = { page: 1, perPage: 50, total: 5 }
-      expect(isFirst(state)).toBe(true)
-      expect(isLast(state)).toBe(true)
-    })
+  it('shown when there is a next page (first page of many)', () => {
+    expect(isHidden({ hasPrev: false, hasNext: true })).toBe(false)
   })
 
-  describe('from/to range label', () => {
-    it('page 1 shows 1–10 of 30', () => {
-      const s = { page: 1, perPage: 10, total: 30 }
-      expect(from(s)).toBe(1)
-      expect(to(s)).toBe(10)
-    })
-
-    it('page 2 shows 11–20 of 30', () => {
-      const s = { page: 2, perPage: 10, total: 30 }
-      expect(from(s)).toBe(11)
-      expect(to(s)).toBe(20)
-    })
-
-    it('last page clamps to total', () => {
-      const s = { page: 3, perPage: 10, total: 25 }
-      expect(from(s)).toBe(21)
-      expect(to(s)).toBe(25)
-    })
-
-    it('empty list shows from=to=0 (clamped)', () => {
-      const s = { page: 1, perPage: 50, total: 0 }
-      expect(from(s)).toBe(0)
-      expect(to(s)).toBe(0)
-    })
+  it('shown when there is a previous page (last page of many)', () => {
+    expect(isHidden({ hasPrev: true, hasNext: false })).toBe(false)
   })
 
-  describe('onChange fires correct page number', () => {
-    it('next page is current + 1', () => {
-      const page = 2
-      expect(page + 1).toBe(3)
-    })
+  it('shown in the middle (both directions navigable)', () => {
+    expect(isHidden({ hasPrev: true, hasNext: true })).toBe(false)
+  })
+})
 
-    it('prev page is current - 1', () => {
-      const page = 3
-      expect(page - 1).toBe(2)
-    })
+describe('Pagination button disabled states', () => {
+  it('prev is disabled on the first page (no prev)', () => {
+    expect(prevDisabled({ hasPrev: false, hasNext: true })).toBe(true)
+  })
 
-    it('does not go below 1 on prev from page 1', () => {
-      const page = 1
-      const next = isFirst({ page, perPage: 10, total: 30 }) ? page : page - 1
-      expect(next).toBe(1)
-    })
+  it('prev is enabled once we have navigated forward', () => {
+    expect(prevDisabled({ hasPrev: true, hasNext: true })).toBe(false)
+  })
 
-    it('does not exceed totalPages on next from last', () => {
-      const state = { page: 3, perPage: 10, total: 30 }
-      const next = isLast(state) ? state.page : state.page + 1
-      expect(next).toBe(3)
-    })
+  it('next is disabled on the last page (next_cursor was null)', () => {
+    expect(nextDisabled({ hasPrev: true, hasNext: false })).toBe(true)
+  })
+
+  it('next is enabled when next_cursor is present', () => {
+    expect(nextDisabled({ hasPrev: false, hasNext: true })).toBe(false)
+  })
+})
+
+describe('Pagination callbacks', () => {
+  it('onNext is a no-op guard when hasNext is false', () => {
+    const onNext = vi.fn()
+    const hasNext = false
+    // Mirrors `onClick={() => hasNext && onNext()}`.
+    if (hasNext) onNext()
+    expect(onNext).not.toHaveBeenCalled()
+  })
+
+  it('onNext fires when hasNext is true', () => {
+    const onNext = vi.fn()
+    const hasNext = true
+    if (hasNext) onNext()
+    expect(onNext).toHaveBeenCalledTimes(1)
+  })
+
+  it('onPrev is a no-op guard when hasPrev is false', () => {
+    const onPrev = vi.fn()
+    const hasPrev = false
+    if (hasPrev) onPrev()
+    expect(onPrev).not.toHaveBeenCalled()
+  })
+
+  it('onPrev fires when hasPrev is true', () => {
+    const onPrev = vi.fn()
+    const hasPrev = true
+    if (hasPrev) onPrev()
+    expect(onPrev).toHaveBeenCalledTimes(1)
   })
 })
