@@ -1088,10 +1088,7 @@ mod tests {
         let RuleOutput::Percentage { targets, .. } = domain.rule.output else {
             panic!("expected Percentage output");
         };
-        assert!(
-            targets.is_empty(),
-            "empty hash_inputs → empty targets"
-        );
+        assert!(targets.is_empty(), "empty hash_inputs → empty targets");
     }
 
     // ── feature-flag-yrj — empty-WHEN rejection ────────────────────────
