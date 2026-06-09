@@ -105,3 +105,16 @@ discipline, etc.). Especially relevant to this clean-cutover track:
     location; superseded by stitchd-event-writer/migrations/ (embedded migrator). It was
     dead since schema_cutover_20260525 but never deleted.
 ---
+
+## [2026-06-09] - Phase 5: Derived Artifacts, Docs, Full-Stack Verification (Tasks 5.1-5.3)
+- **Implemented:** reset_dev_db.sh --all (PG+CH+Scylla from new baselines); product.md/tech-stack.md synced; full gate green.
+- **Verification:** fmt --check ✅; clippy --all-targets -D warnings ✅; cargo test --workspace 2958 passed / 0 failed (39 ignored live-CH, validated in Phase 2) ✅; sqlx prepare --check ✅; xtask docs idempotent (zero tracked drift) ✅; admin tsc/lint(0 err)/vitest 994 ✅.
+- **Learnings:**
+  - Gotcha: cargo fmt was never run before committing Phases 2-3, so two files (migrations.rs, mapping.rs) had non-fmt-compliant code that only surfaced at the Phase 5 fmt gate. RUN fmt per-phase, not just at the end.
+  - Context: gateway REST segments.rs has its OWN DTO emitting user_list/excluded_keys as
+    empty arrays INDEPENDENT of proto AdminSegment — so removing those proto fields left the
+    REST contract + admin UI byte-unchanged (admin TS already treated them as "never set by server").
+  - Context: reset_dev_db.sh references NO individual migration filenames (PG via dir, CH via
+    event_writer embedded migrator, Scylla via xtask) — deleting/renaming baselines needs no
+    script edit. CI live-CH --test list only needs syncing when a stats-service tests/*.rs is renamed.
+---

@@ -66,12 +66,12 @@ dev containers; parallelism savings are small and conflict risk is real.
 
 ## Phase 5: Derived Artifacts, Docs, and Full-Stack Verification
 
-- [ ] Task 5.1: Update `scripts/reset_dev_db.sh` (+ `--all`) for the deleted migration files; run a
+- [x] Task 5.1: [7781a0d] Update `scripts/reset_dev_db.sh` (+ `--all`) for the deleted migration files; run a
       full `scripts/reset_dev_db.sh --all` from scratch across PG/CH/ScyllaDB.
-- [ ] Task 5.2: Regenerate docs (`cargo xtask docs`); update `product.md` / `tech-stack.md`
+- [x] Task 5.2: [7781a0d] Regenerate docs (`cargo xtask docs`); update `product.md` / `tech-stack.md`
       schema/proto/migration sections to the new single-baseline final state with a dated cutover
       note; confirm `git diff --exit-code` is clean.
-- [ ] Task 5.3: Full gate — `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+- [x] Task 5.3: [7781a0d] Full gate — `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace`, `cargo sqlx prepare --check`; sync CI's live-CH `--test` list if any
       stats test file changed; run admin UI type-check/lint/vitest if a consumed contract changed.
-- [ ] Task: Conductor - User Manual Verification 'Derived Artifacts, Docs, and Full-Stack Verification' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Derived Artifacts, Docs, and Full-Stack Verification' [autonomous] (Protocol in workflow.md)
