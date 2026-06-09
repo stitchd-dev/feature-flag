@@ -6,20 +6,20 @@ dev containers; parallelism savings are small and conflict risk is real.
 
 ## Phase 1: PostgreSQL Final-State Baseline
 
-- [ ] Task 1.1: Capture the fully-migrated PG schema (pg_dump --schema-only of a dev DB
+- [x] Task 1.1: [91949fe] Capture the fully-migrated PG schema (pg_dump --schema-only of a dev DB
       migrated through all 10 files) as the consolidation target, and author
       `crates/stitchd-db/migrations/20260609000001_v1_baseline.sql` reproducing the exact
       final schema (all tables/columns/constraints; the 6 partial soft-delete indexes;
       sdk-key + covering + context-registry indexes; exclusion_groups + unit_context_type;
       lifecycle_automation; experiment_start_prerequisites; bandit_foundation + lifecycle;
       idempotency_keys; flag_key partial-unique fix; frozen column already absent).
-- [ ] Task 1.2: Delete the old PG baseline + the nine post-baseline incremental migration files.
-- [ ] Task 1.3: Reset dev Postgres from scratch; verify the single baseline applies cleanly and
+- [x] Task 1.2: [91949fe] Delete the old PG baseline + the nine post-baseline incremental migration files.
+- [x] Task 1.3: [91949fe] Reset dev Postgres from scratch; verify the single baseline applies cleanly and
       its schema is functionally identical to the pre-cutover applied schema (diff two pg_dump
       --schema-only outputs → zero meaningful diff).
-- [ ] Task 1.4: Regenerate `.sqlx/` offline cache; confirm
+- [x] Task 1.4: [91949fe] Regenerate `.sqlx/` offline cache; confirm
       `cargo sqlx prepare --workspace --check -- --all-targets --features stitchd-sdk-rust/test-util` passes.
-- [ ] Task: Conductor - User Manual Verification 'PostgreSQL Final-State Baseline' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'PostgreSQL Final-State Baseline' [autonomous] (Protocol in workflow.md)
 
 ## Phase 2: ClickHouse Final-State Baseline + Single `events` Table
 
