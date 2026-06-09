@@ -1,8 +1,8 @@
 {
-  "current_phase": "Phase 2: ClickHouse Final-State Baseline + Single events Table",
-  "current_phase_index": 1,
+  "current_phase": "Phase 3: Proto/API Backward-Compat Removal + Tag Compaction",
+  "current_phase_index": 2,
   "current_task_index": 0,
-  "completed_phases": ["Phase 1: PostgreSQL Final-State Baseline"],
-  "last_updated": "2026-06-09T07:20:00Z",
+  "completed_phases": ["Phase 1: PostgreSQL Final-State Baseline", "Phase 2: ClickHouse Final-State Baseline + Single events Table"],
+  "last_updated": "2026-06-09T07:35:00Z",
   "status": "in_progress"
 }

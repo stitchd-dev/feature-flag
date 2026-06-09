@@ -23,24 +23,24 @@ dev containers; parallelism savings are small and conflict risk is real.
 
 ## Phase 2: ClickHouse Final-State Baseline + Single `events` Table
 
-- [ ] Task 2.1: Determine the canonical `events` schema authoritatively (the query layer reads
+- [x] Task 2.1: [ef8c97a] Determine the canonical `events` schema authoritatively (the query layer reads
       `FROM events`; docs label `events_v2` canonical) and document the collapse: a single
       `events` table carrying the multi-context `Array(Tuple(String,String))` schema; the
       duplicate/legacy table dropped.
-- [ ] Task 2.2: Author `crates/stitchd-event-writer/migrations/20260609000001_v1_baseline.sql`
+- [x] Task 2.2: [ef8c97a] Author `crates/stitchd-event-writer/migrations/20260609000001_v1_baseline.sql`
       folding old CH baseline + `experiment_interactions` (N-way schema) + `eval_log_evaluation_id`
       into one file with: single `events` table, `flag_evaluation_log` (+ evaluation_id),
       `experiment_results` (+ sequential_result), `experiment_assignments` (+ _mv),
       `events_experiment_daily` (+ _mv reading `FROM events`), `experiment_interactions`,
       and the `experiment_iterations_active` dictionary. No `events_v2` anywhere.
-- [ ] Task 2.3: Delete superseded CH migration files; update the `event_writer::migrations`
+- [x] Task 2.3: [ef8c97a] Delete superseded CH migration files; update the `event_writer::migrations`
       MIGRATIONS array to reference only the new baseline.
-- [ ] Task 2.4: Update every CH reader/writer/test to the single `events` name (event_query.rs,
+- [x] Task 2.4: [ef8c97a] Update every CH reader/writer/test to the single `events` name (event_query.rs,
       ingestion.rs, aggregation.rs, clickhouse_query.rs, dispatch.rs, stats queries,
       clickhouse_views.rs) — assert no `events_v2` references remain.
-- [ ] Task 2.5: Reset dev ClickHouse from scratch; run the live-CH integration + view tests
+- [x] Task 2.5: [ef8c97a] Reset dev ClickHouse from scratch; run the live-CH integration + view tests
       (`--ignored` self-seeding set) to verify the baseline + single-table collapse.
-- [ ] Task: Conductor - User Manual Verification 'ClickHouse Final-State Baseline + Single events Table' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'ClickHouse Final-State Baseline + Single events Table' [autonomous] (Protocol in workflow.md)
 
 ## Phase 3: Proto/API Backward-Compat Removal + Tag Compaction
 

@@ -53,3 +53,19 @@ discipline, etc.). Especially relevant to this clean-cutover track:
     DEAD (only README references it) -> Phase 4 removal. tech-stack.md wrongly lists
     events_v2 + pg_partman -> Phase 5 docs fix.
 ---
+
+## [2026-06-09] - Phase 2: ClickHouse Final-State Baseline + Single events (Tasks 2.1-2.5)
+- **Implemented:** Folded 3 CH migrations into one 20260609000001_v1_baseline.sql; migrations.rs registry -> 1 entry.
+- **Files changed:** crates/stitchd-event-writer/migrations/ (3 deleted, 1 added), src/migrations.rs; commit ef8c97a
+- **Learnings:**
+  - Context: events_v2 + flag_evaluation_log_v2 were ALREADY consolidated to events /
+    flag_evaluation_log in schema_cutover_20260525 — the actual CH schema has a single
+    events table. The product/tech-stack docs claiming events_v2 is canonical are STALE
+    (Phase 5 fix). Zero events_v2 tokens remain in crates/ now.
+  - Gotcha: evaluation_id was added to flag_evaluation_log by an ALTER (BUG-030 gap);
+    folded into the CREATE TABLE as the LAST column to match the live column order.
+  - Gotcha: ClickHouse Replicated*MergeTree leaves Keeper replica registrations after a
+    DROP; reset must SYSTEM DROP REPLICA orphans (reset_dev_db.sh already does this).
+  - Context: stats-service self-seeding live-CH tests call event_writer::migrations::run,
+    so they validate the new baseline end-to-end without manual seeding.
+---
