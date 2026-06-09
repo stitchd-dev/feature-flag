@@ -556,7 +556,7 @@ impl ManagementService for ManagementServiceImpl {
     ) -> Result<Response<ListOrgUsersResponse>, Status> {
         let r = request.into_inner();
         let org_id = parse_org_id(&r.org_id)?;
-        let after = stitchd_db::KeysetCursor::decode_opt(Some(&r.cursor))
+        let after = stitchd_db::EmailKeysetCursor::decode_opt(Some(&r.cursor))
             .map_err(|_| Status::invalid_argument("invalid cursor"))?;
         let limit = u64::from(stitchd_db::effective_limit(r.limit, 50, 200));
         let (user_pairs, next_cursor) = self
@@ -828,7 +828,7 @@ mod tests {
         async fn list_org_users_keyset(
             &self,
             _: OrganisationId,
-            _: Option<stitchd_db::KeysetCursor>,
+            _: Option<stitchd_db::EmailKeysetCursor>,
             _: u64,
         ) -> Result<(Vec<(User, OrgRole)>, Option<String>), RepositoryError> {
             Ok((vec![], None))

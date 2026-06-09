@@ -192,7 +192,7 @@ impl AuthUserRepository for MockUserRepo {
     async fn list_org_users_keyset(
         &self,
         _org_id: OrganisationId,
-        _after: Option<stitchd_db::KeysetCursor>,
+        _after: Option<stitchd_db::EmailKeysetCursor>,
         _limit: u64,
     ) -> Result<(Vec<(User, OrgRole)>, Option<String>), RepositoryError> {
         Ok((vec![], None))

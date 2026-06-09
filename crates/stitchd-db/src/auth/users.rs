@@ -69,7 +69,8 @@ pub trait AuthUserRepository: Send + Sync {
     ) -> Result<Vec<(User, OrgRole)>, RepositoryError>;
 
     /// List users in an org with **keyset** (cursor) pagination, ordered by
-    /// `(created_at, id)`.
+    /// `(email, id)` — preserving the list's alphabetical-by-email order (email
+    /// is globally unique, so it is a stable keyset).
     ///
     /// `after` is the keyset position from a prior page (`None` for the first
     /// page). Returns `(page_items, next_cursor)` where `next_cursor` is the
@@ -77,7 +78,7 @@ pub trait AuthUserRepository: Send + Sync {
     async fn list_org_users_keyset(
         &self,
         org_id: OrganisationId,
-        after: Option<crate::KeysetCursor>,
+        after: Option<crate::EmailKeysetCursor>,
         limit: u64,
     ) -> Result<(Vec<(User, OrgRole)>, Option<String>), RepositoryError>;
 }
@@ -400,15 +401,16 @@ impl AuthUserRepository for PgAuthUserRepository {
     async fn list_org_users_keyset(
         &self,
         org_id: OrganisationId,
-        after: Option<crate::KeysetCursor>,
+        after: Option<crate::EmailKeysetCursor>,
         limit: u64,
     ) -> Result<(Vec<(User, OrgRole)>, Option<String>), RepositoryError> {
         use sqlx::Row as _;
 
-        // Keyset pagination ordered by (created_at, id): fetch limit+1 rows; the
+        // Keyset pagination ordered by (email, id): fetch limit+1 rows; the
         // surplus row signals a next page. The row-value comparison
-        // `(created_at, id) > ($cursor_created_at, $cursor_id)` resumes strictly
-        // after the prior page's last row. A NULL cursor (first page) admits all.
+        // `(email, id) > ($cursor_email, $cursor_id)` resumes strictly after the
+        // prior page's last row. A NULL cursor (first page) admits all. Ordered
+        // by email to keep the list alphabetical (email is globally unique).
         #[allow(clippy::cast_possible_wrap)]
         let rows = sqlx::query(
             r"
@@ -420,14 +422,14 @@ impl AuthUserRepository for PgAuthUserRepository {
             FROM users u
             JOIN org_memberships m ON u.id = m.user_id
             WHERE m.org_id = $1
-              AND ($2::timestamptz IS NULL OR (u.created_at, u.id) > ($2, $3))
-            ORDER BY u.created_at, u.id
+              AND ($2::text IS NULL OR (u.email, u.id) > ($2, $3))
+            ORDER BY u.email, u.id
             LIMIT $4
             ",
         )
         .bind(org_id.as_uuid())
-        .bind(after.map(|c| c.created_at))
-        .bind(after.map(|c| c.id))
+        .bind(after.as_ref().map(|c| c.email.clone()))
+        .bind(after.as_ref().map(|c| c.id))
         .bind((limit + 1) as i64)
         .fetch_all(&self.pool)
         .await
@@ -464,8 +466,8 @@ impl AuthUserRepository for PgAuthUserRepository {
         let next_cursor = if users.len() as u64 > limit {
             users.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
             users.last().map(|(u, _)| {
-                crate::KeysetCursor {
-                    created_at: u.created_at,
+                crate::EmailKeysetCursor {
+                    email: u.email.clone(),
                     id: u.id.as_uuid(),
                 }
                 .encode()
@@ -781,7 +783,7 @@ mod tests {
     }
 
     /// Rigorous correctness: paging through with the returned cursor visits EVERY
-    /// row exactly once, in `(created_at, id)` order, with no duplicates or gaps.
+    /// row exactly once, in `(email, id)` order, with no duplicates or gaps.
     #[sqlx::test(migrations = "./migrations")]
     async fn list_org_users_keyset_pages_through_all_rows_exactly_once(pool: PgPool) {
         const N: usize = 23;
@@ -791,7 +793,7 @@ mod tests {
 
         // Walk pages of 7 (so the last page is partial: 23 = 7+7+7+2).
         let mut seen: Vec<uuid::Uuid> = Vec::new();
-        let mut cursor: Option<crate::KeysetCursor> = None;
+        let mut cursor: Option<crate::EmailKeysetCursor> = None;
         let mut pages = 0;
         loop {
             let (items, next) = repo.list_org_users_keyset(org_id, cursor, 7).await.unwrap();
@@ -801,7 +803,7 @@ mod tests {
                 seen.push(u.id.as_uuid());
             }
             match next {
-                Some(tok) => cursor = Some(crate::KeysetCursor::decode(&tok).unwrap()),
+                Some(tok) => cursor = Some(crate::EmailKeysetCursor::decode(&tok).unwrap()),
                 None => break,
             }
             assert!(pages <= N + 1, "must terminate");

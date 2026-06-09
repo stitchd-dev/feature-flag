@@ -25,7 +25,7 @@ pub use auth::{
 };
 pub use error::RepositoryError;
 pub use repository::{
-    AuditLogger, ContextRegistryRepository, CursorError, EnvironmentRepository,
+    AuditLogger, ContextRegistryRepository, CursorError, EmailKeysetCursor, EnvironmentRepository,
     EventDefinitionRepository, ExperimentRepository, FlagRepository, KeysetCursor,
     ListContextCounts, ListSegmentSummary, MetricRepository, OrganisationRepository,
     ProjectRepository, RoleRepository, SdkKeyRepository, SegmentRepository, UserRepository,

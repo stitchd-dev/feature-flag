@@ -25,7 +25,7 @@ pub mod composite;
 pub mod cursor;
 pub mod pg;
 
-pub use cursor::{CursorError, KeysetCursor, effective_limit};
+pub use cursor::{CursorError, EmailKeysetCursor, KeysetCursor, effective_limit};
 
 // ---------------------------------------------------------------------------
 // Scylla-backed list segment types

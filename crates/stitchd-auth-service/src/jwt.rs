@@ -188,7 +188,7 @@ mod tests {
         async fn list_org_users_keyset(
             &self,
             _org_id: stitchd_core::id::OrganisationId,
-            _after: Option<stitchd_db::KeysetCursor>,
+            _after: Option<stitchd_db::EmailKeysetCursor>,
             _limit: u64,
         ) -> Result<(Vec<(User, stitchd_core::auth::OrgRole)>, Option<String>), RepositoryError>
         {

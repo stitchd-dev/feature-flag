@@ -86,6 +86,51 @@ pub fn effective_limit(requested: u32, default: u32, max: u32) -> u32 {
     }
 }
 
+/// A keyset position for lists ordered by `(email, id)`.
+///
+/// Used where the natural sort is alphabetical by a unique string column (e.g.
+/// the org-users list keeps its email ordering) rather than by `created_at`.
+/// Same opaque-token machinery as [`KeysetCursor`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EmailKeysetCursor {
+    /// `email` of the boundary row.
+    pub email: String,
+    /// `id` of the boundary row (the unique tiebreaker).
+    pub id: Uuid,
+}
+
+impl EmailKeysetCursor {
+    /// Encode this position into an opaque `base64url(JSON)` token.
+    #[must_use]
+    pub fn encode(&self) -> String {
+        let json = serde_json::to_vec(self).unwrap_or_default();
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json)
+    }
+
+    /// Decode an opaque token back into an `(email, id)` keyset position.
+    ///
+    /// # Errors
+    /// [`CursorError::Decode`] for non-base64url input; [`CursorError::Payload`]
+    /// when the bytes are not the expected `{email, id}` JSON.
+    pub fn decode(token: &str) -> Result<Self, CursorError> {
+        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(token)
+            .map_err(|_| CursorError::Decode)?;
+        serde_json::from_slice(&bytes).map_err(|_| CursorError::Payload)
+    }
+
+    /// Decode an optional token (empty/absent ⇒ first page, `Ok(None)`).
+    ///
+    /// # Errors
+    /// Propagates [`CursorError`] when a present token is malformed.
+    pub fn decode_opt(token: Option<&str>) -> Result<Option<Self>, CursorError> {
+        match token {
+            None | Some("") => Ok(None),
+            Some(t) => Self::decode(t).map(Some),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,5 +173,19 @@ mod tests {
         assert_eq!(effective_limit(0, 50, 200), 50);
         assert_eq!(effective_limit(500, 50, 200), 200);
         assert_eq!(effective_limit(75, 50, 200), 75);
+    }
+
+    #[test]
+    fn email_cursor_roundtrips_and_rejects_garbage() {
+        let c = EmailKeysetCursor {
+            email: "bob@example.com".into(),
+            id: Uuid::from_u128(7),
+        };
+        let tok = c.encode();
+        assert!(!tok.contains('@'), "token is opaque");
+        assert_eq!(EmailKeysetCursor::decode(&tok).unwrap(), c);
+        assert_eq!(EmailKeysetCursor::decode_opt(Some("")).unwrap(), None);
+        assert_eq!(EmailKeysetCursor::decode_opt(None).unwrap(), None);
+        assert_eq!(EmailKeysetCursor::decode("!!!"), Err(CursorError::Decode));
     }
 }
