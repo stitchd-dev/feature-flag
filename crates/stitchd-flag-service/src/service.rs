@@ -4379,7 +4379,6 @@ mod tests {
         let bad_rule = FlagRule {
             rule_payload: serde_json::to_vec(&serde_json::Value::Null).unwrap(),
             output: Some(Output::Allocation(PercentageAllocation {
-                context_hash_specs: Default::default(),
                 buckets: vec![AllocationBucket {
                     variant_key: "on".to_string(),
                     weight_bp: 10000,
@@ -4454,7 +4453,6 @@ mod tests {
         let bad_rule = FlagRule {
             rule_payload: serde_json::to_vec(&serde_json::Value::Null).unwrap(),
             output: Some(Output::Allocation(PercentageAllocation {
-                context_hash_specs: Default::default(),
                 buckets: vec![AllocationBucket {
                     variant_key: "on".to_string(),
                     weight_bp: 10000,

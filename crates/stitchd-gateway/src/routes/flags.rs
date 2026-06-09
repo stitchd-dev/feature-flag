@@ -969,7 +969,6 @@ fn rule_body_to_proto(
         let proto_hash_inputs: Vec<_> = selectors.iter().map(HashSelectorJson::to_proto).collect();
 
         Some(Output::Allocation(PercentageAllocation {
-            context_hash_specs: Default::default(),
             buckets,
             hash_inputs: proto_hash_inputs,
             exclusion_gate: None,

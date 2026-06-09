@@ -23,7 +23,6 @@
 //!    no-op. The gated flag has no segments, so neither is touched during
 //!    `evaluate`.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -95,7 +94,6 @@ fn key_in_bucket_range(lo: u16, hi: u16) -> String {
 /// allocates 100% to `on` and carries the given exclusion gate.
 fn build_proto_flag(gate: &ExclusionGate) -> FeatureFlag {
     let alloc = PercentageAllocation {
-        context_hash_specs: HashMap::new(),
         buckets: vec![
             AllocationBucket {
                 variant_key: "on".to_string(),

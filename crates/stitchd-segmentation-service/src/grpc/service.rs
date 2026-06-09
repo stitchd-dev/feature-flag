@@ -802,9 +802,6 @@ fn segment_to_admin_proto_with_counts(
         description: seg.description.clone(),
         tags: seg.tags.clone(),
         condition_expr: condition_expr_bytes,
-        // Always empty — callers use include_count / exclude_count instead.
-        user_list: vec![],
-        excluded_keys: vec![],
         created_at_ms: seg.created_at.timestamp_millis(),
         updated_at_ms: seg.updated_at.timestamp_millis(),
         version: u64::try_from(seg.version).unwrap_or(0),

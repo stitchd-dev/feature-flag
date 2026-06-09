@@ -31,3 +31,90 @@ discipline, etc.). Especially relevant to this clean-cutover track:
 ---
 
 <!-- Learnings from implementation will be appended below -->
+
+## [2026-06-09] - Phase 1: PostgreSQL Final-State Baseline (Tasks 1.1-1.4)
+- **Implemented:** Collapsed 10 PG migrations into one 20260609000001_v1_baseline.sql.
+- **Files changed:** crates/stitchd-db/migrations/ (10 deleted, 1 added); commit 91949fe
+- **Learnings:**
+  - Pattern: Build a consolidated baseline by pg_dump --schema-only of a fully-migrated
+    scratch DB, then VERIFY via round-trip (apply baseline to fresh DB, dump, diff vs
+    ground truth = zero diff). Robust + verifiable vs hand-folding.
+  - Gotcha: pg_dump emits psql \restrict/\unrestrict meta-commands AND a
+    'SELECT set_config(search_path,'',false)' that PERSISTS an empty search_path —
+    this breaks sqlx's _sqlx_migrations bookkeeping ("relation _sqlx_migrations does
+    not exist"). Strip the entire SET preamble + backslash meta-commands; all DDL is
+    public.-qualified so none is needed.
+  - Gotcha: dev 'stitchd' DB can hold idle connections that block 'sqlx database drop'
+    ("being accessed by other users") — pg_terminate_backend first.
+  - Context: schema is functionally identical, so the existing .sqlx cache validates
+    unchanged (cargo sqlx prepare --check passed, no regen needed).
+  - Context: discovered events_v2 + flag_evaluation_log_v2 already consolidated to
+    events/flag_evaluation_log in the DB; crates/stitchd-db/clickhouse-migrations/ is
+    DEAD (only README references it) -> Phase 4 removal. tech-stack.md wrongly lists
+    events_v2 + pg_partman -> Phase 5 docs fix.
+---
+
+## [2026-06-09] - Phase 2: ClickHouse Final-State Baseline + Single events (Tasks 2.1-2.5)
+- **Implemented:** Folded 3 CH migrations into one 20260609000001_v1_baseline.sql; migrations.rs registry -> 1 entry.
+- **Files changed:** crates/stitchd-event-writer/migrations/ (3 deleted, 1 added), src/migrations.rs; commit ef8c97a
+- **Learnings:**
+  - Context: events_v2 + flag_evaluation_log_v2 were ALREADY consolidated to events /
+    flag_evaluation_log in schema_cutover_20260525 — the actual CH schema has a single
+    events table. The product/tech-stack docs claiming events_v2 is canonical are STALE
+    (Phase 5 fix). Zero events_v2 tokens remain in crates/ now.
+  - Gotcha: evaluation_id was added to flag_evaluation_log by an ALTER (BUG-030 gap);
+    folded into the CREATE TABLE as the LAST column to match the live column order.
+  - Gotcha: ClickHouse Replicated*MergeTree leaves Keeper replica registrations after a
+    DROP; reset must SYSTEM DROP REPLICA orphans (reset_dev_db.sh already does this).
+  - Context: stats-service self-seeding live-CH tests call event_writer::migrations::run,
+    so they validate the new baseline end-to-end without manual seeding.
+---
+
+## [2026-06-09] - Phase 3: Proto/API Backward-Compat Removal + Tag Compaction (Tasks 3.1-3.4)
+- **Implemented:** Removed compat-only proto fields + compacted tags; updated all consumers + contract tests. Commit f95b809
+- **Files changed:** proto/{flags/flag_sync,analytics/analytics,segments/segmentation_service}.proto; stitchd-proto/src/tests.rs; flag-service mapping.rs+service.rs; experimentation service.rs; gateway routes/flags.rs; segmentation grpc/service.rs; sdks/rust/{src/client.rs, tests/conformance.rs, parity_with_preview.rs, exclusion_gating.rs, e2e_cross_context_hashing.rs}
+- **Learnings:**
+  - Pattern: prost generates struct fields by NAME, so compacting proto TAG numbers
+    does NOT break Rust consumers (only wire compat, which is irrelevant when nothing
+    is live). Only FIELD REMOVALS require consumer edits. No checked-in generated .rs
+    (tonic build.rs generates into OUT_DIR) so editing .proto + rebuild regenerates.
+  - Gotcha: the Rust SDK lives in sdks/rust/, NOT crates/ — crates/-scoped greps MISS
+    SDK consumers. Always whole-tree grep (excl target/.git) for proto-field consumers.
+  - Gotcha: a field name can appear in TWO messages (segments user_list/excluded_keys:
+    active request side + deprecated AdminSegment response side). Remove only the
+    deprecated copy; verify the active one is untouched.
+  - Gotcha: SDK conformance fixtures drove percentage hashing through the legacy
+    context_hash_specs map (canonical sort: context_type ASC, param ASC). Removing the
+    fallback requires rebuilding hash_inputs in that SAME canonical order (BTreeMap +
+    sorted params) to keep fixture hashes byte-identical — else conformance fails.
+  - Context: removed shims: flags context_hash_specs+ContextHashSpec; analytics
+    TrackEvent/EventFiring reserved tags; segments AdminSegment user_list/excluded_keys.
+    Kept legitimate "empty→user/fixed" defaults (not removable compat).
+---
+
+## [2026-06-09] - Phase 4: Dead Legacy Code-Path Removal (Tasks 4.1-4.2)
+- **Implemented:** Deleted dead crates/stitchd-db/clickhouse-migrations/ dir; removed legacy MfaChallengeRepository trait+impl+test; rewrote stale comments. Commit 9c60185
+- **Files changed:** deleted clickhouse-migrations/ (6 files); stitchd-db src/auth/mfa.rs+mod.rs+lib.rs, README.md; analytics experiment_results.rs; sdk e2e test; .sqlx (1 pruned)
+- **Learnings:**
+  - Gotcha: most "legacy" grep hits in stitchd-core stats (interaction/loglinear/bayesian)
+    are NOT compat shims — they are regression-gate references to the original pairwise
+    "legacy" fn that the N-way generalization must match byte-for-byte. Do NOT remove.
+  - Pattern: removing a sqlx::query! macro prunes its .sqlx/query-*.json cache entry —
+    commit the deletion (cargo sqlx prepare regenerates; CI sqlx-check verifies).
+  - Context: crates/stitchd-db/clickhouse-migrations/ was the pre-cutover CH migration
+    location; superseded by stitchd-event-writer/migrations/ (embedded migrator). It was
+    dead since schema_cutover_20260525 but never deleted.
+---
+
+## [2026-06-09] - Phase 5: Derived Artifacts, Docs, Full-Stack Verification (Tasks 5.1-5.3)
+- **Implemented:** reset_dev_db.sh --all (PG+CH+Scylla from new baselines); product.md/tech-stack.md synced; full gate green.
+- **Verification:** fmt --check ✅; clippy --all-targets -D warnings ✅; cargo test --workspace 2958 passed / 0 failed (39 ignored live-CH, validated in Phase 2) ✅; sqlx prepare --check ✅; xtask docs idempotent (zero tracked drift) ✅; admin tsc/lint(0 err)/vitest 994 ✅.
+- **Learnings:**
+  - Gotcha: cargo fmt was never run before committing Phases 2-3, so two files (migrations.rs, mapping.rs) had non-fmt-compliant code that only surfaced at the Phase 5 fmt gate. RUN fmt per-phase, not just at the end.
+  - Context: gateway REST segments.rs has its OWN DTO emitting user_list/excluded_keys as
+    empty arrays INDEPENDENT of proto AdminSegment — so removing those proto fields left the
+    REST contract + admin UI byte-unchanged (admin TS already treated them as "never set by server").
+  - Context: reset_dev_db.sh references NO individual migration filenames (PG via dir, CH via
+    event_writer embedded migrator, Scylla via xtask) — deleting/renaming baselines needs no
+    script edit. CI live-CH --test list only needs syncing when a stats-service tests/*.rs is renamed.
+---

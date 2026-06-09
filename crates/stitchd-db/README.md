@@ -39,7 +39,10 @@ PostgreSQL migrations live in `migrations/` and are managed by `sqlx-cli`:
 sqlx migrate run --database-url $DATABASE_URL
 ```
 
-ClickHouse migrations live in `clickhouse-migrations/`.
+ClickHouse migrations live in `crates/stitchd-event-writer/migrations/` and are
+applied by the canonical `stitchd_event_writer::migrations` runner (via
+`cargo run -p xtask -- ch-migrate`). ScyllaDB migrations live in
+`scylla-migrations/` (applied via `cargo run -p xtask -- scylla-migrate`).
 
 ## Dependencies
 

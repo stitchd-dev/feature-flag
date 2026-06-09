@@ -1674,13 +1674,8 @@ fn convert_proto_flag_rule_to_core(
 /// Convert a proto [`PercentageAllocation`] to a core
 /// [`RuleOutput::Percentage`].
 ///
-/// Phase 3 of `flag_eval_unify_20260522` added `hash_inputs` (ordered selector
-/// list) alongside the legacy `context_hash_specs` map; this helper prefers
-/// the new field when present and falls back to the legacy map for
-/// back-compat. The fallback uses canonical-sort semantics
-/// (`context_type ASC, parameter ASC within type`) matching the PG
-/// migration backfill so bucket assignments remain stable across the
-/// dual-schema state.
+/// `hash_inputs` (the ordered selector list) is the sole authoritative
+/// percentage-hash input.
 fn proto_allocation_to_core(
     alloc: &PercentageAllocation,
     variant_id_by_key: &HashMap<String, VariantId>,
@@ -1791,58 +1786,26 @@ fn proto_allocation_to_core(
 /// Read the canonical [`HashInputSpec`] out of a proto
 /// [`PercentageAllocation`].
 ///
-/// Prefer the new `hash_inputs` field; fall back to canonical-sort of the
-/// legacy `context_hash_specs` map. Public to the SDK module so the
-/// future test fixtures + integration tests can validate the proto wire
-/// shape without going through `evaluate_flag`.
+/// `hash_inputs` is the sole authoritative selector list (ordered). Public to
+/// the SDK module so test fixtures + integration tests can validate the proto
+/// wire shape without going through `evaluate_flag`.
 pub(crate) fn proto_to_core_hash_input_spec(alloc: &PercentageAllocation) -> HashInputSpec {
-    if !alloc.hash_inputs.is_empty() {
-        let selectors: Vec<HashSelector> = alloc
-            .hash_inputs
-            .iter()
-            .filter_map(|sel| match &sel.selector {
-                Some(ProtoHashSelectorOneof::ContextKey(ck)) => Some(HashSelector::ContextKey {
-                    context_type: ck.context_type.clone(),
-                }),
-                Some(ProtoHashSelectorOneof::ContextParameter(cp)) => {
-                    Some(HashSelector::ContextParameter {
-                        context_type: cp.context_type.clone(),
-                        parameter: cp.parameter.clone(),
-                    })
-                }
-                None => None,
-            })
-            .collect();
-        return HashInputSpec::new(selectors);
-    }
-
-    // Legacy-only path: canonical sort (context_type ASC, parameter ASC
-    // within type). Mirrors `crates/stitchd-db/migrations/20260522000001_...`
-    // backfill so legacy fixtures + dual-schema state stay byte-equivalent.
-    let mut entries: Vec<(&String, &Vec<String>)> = alloc
-        .context_hash_specs
+    let selectors: Vec<HashSelector> = alloc
+        .hash_inputs
         .iter()
-        .map(|(k, v)| (k, &v.parameter_names))
-        .collect();
-    entries.sort_by(|a, b| a.0.cmp(b.0));
-
-    let mut selectors: Vec<HashSelector> = Vec::new();
-    for (ctx_type, params) in entries {
-        if params.is_empty() {
-            selectors.push(HashSelector::ContextKey {
-                context_type: ctx_type.clone(),
-            });
-        } else {
-            let mut sorted_params: Vec<&String> = params.iter().collect();
-            sorted_params.sort();
-            for param in sorted_params {
-                selectors.push(HashSelector::ContextParameter {
-                    context_type: ctx_type.clone(),
-                    parameter: param.clone(),
-                });
+        .filter_map(|sel| match &sel.selector {
+            Some(ProtoHashSelectorOneof::ContextKey(ck)) => Some(HashSelector::ContextKey {
+                context_type: ck.context_type.clone(),
+            }),
+            Some(ProtoHashSelectorOneof::ContextParameter(cp)) => {
+                Some(HashSelector::ContextParameter {
+                    context_type: cp.context_type.clone(),
+                    parameter: cp.parameter.clone(),
+                })
             }
-        }
-    }
+            None => None,
+        })
+        .collect();
     HashInputSpec::new(selectors)
 }
 
@@ -2765,7 +2728,7 @@ mod tests {
     async fn evaluate_cross_context_hash_selectors_match_core() {
         use stitchd_proto::flags::v1::flag_rule::Output as POut;
         use stitchd_proto::flags::v1::{
-            AllocationBucket, ContextHashSpec, ContextKeySelector as ProtoCtxKeySel,
+            AllocationBucket, ContextKeySelector as ProtoCtxKeySel,
             ContextParameterSelector as ProtoCtxParamSel, HashSelector as ProtoHashSelMsg,
             PercentageAllocation, hash_selector::Selector as ProtoSelOneof,
         };
@@ -2773,7 +2736,6 @@ mod tests {
         // Build a flag with a single percentage rule that hashes on
         // user.key + user.params.tier + device.params.os.
         let alloc = PercentageAllocation {
-            context_hash_specs: HashMap::new(),
             buckets: vec![
                 AllocationBucket {
                     variant_key: "control".into(),
@@ -2813,7 +2775,6 @@ mod tests {
             name: "rollout".into(),
             rule_id: String::new(),
         };
-        let _ = ContextHashSpec::default(); // silence the unused import on the new path
 
         let flag = FeatureFlag {
             key: "cross-ctx-flag".into(),

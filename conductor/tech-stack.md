@@ -1,5 +1,5 @@
 # Tech Stack
-<!-- Last refreshed: 2026-06-05 (post flag_lifecycle_20260604 — new stitchd-schedule-service (8th gRPC service), flag prerequisites eval-gate, cross-entity dependency integrity. Crate/env-var/PG-table/proto additions synced during Phase 9.) -->
+<!-- Last refreshed: 2026-06-09 (post clean_cutover_20260609 — clean cutover to final state: single fresh dated V1 baselines per store (PG + CH 20260609000001), single canonical `events` table (events_v2 retired), `evaluation_id` folded into flag_evaluation_log, proto compat shims removed + tags compacted (context_hash_specs/ContextHashSpec, TrackEvent/EventFiring reserved tags, AdminSegment user_list/excluded_keys), dead crates/stitchd-db/clickhouse-migrations/ + legacy MfaChallengeRepository removed, pg_partman→pgcrypto fix. No migration path / no backward compat.) -->
 
 <!--
 domain_boundaries_20260530 conventions (see conductor/patterns.md for the full set):
@@ -112,7 +112,7 @@ The system is decomposed into eight Cargo workspace crates, each a standalone gR
 | `stitchd-auth-service` | JWT / SDK-key credential validation; RBAC context assembly | Binary |
 | `stitchd-flag-service` | Flag + variant CRUD; server-streaming definition sync for SDK | Binary |
 | `stitchd-segmentation-service` | Segment CRUD; rule-based + list-based membership evaluation; ScyllaDB-backed list entry storage | Binary |
-| `stitchd-analytics-service` | Event-definition CRUD + ingestion gRPC (multi-context `Array(Tuple(String, String))` rows in ClickHouse `events_v2`); metric-definition CRUD + ClickHouse-backed preview (`POST /v1/metrics/{id}/preview` via `dispatch_preview_query`); owns `experiment_results` in ClickHouse | Binary |
+| `stitchd-analytics-service` | Event-definition CRUD + ingestion gRPC (multi-context `Array(Tuple(String, String))` rows in ClickHouse `events`); metric-definition CRUD + ClickHouse-backed preview (`POST /v1/metrics/{id}/preview` via `dispatch_preview_query`); owns `experiment_results` in ClickHouse | Binary |
 | `stitchd-experimentation-service` | Experiment lifecycle; reads pre-computed results from ClickHouse `experiment_results` table; experiments now reference `metric_ids` (cutover migration `20260520000002`) | Binary |
 | `stitchd-stats-service` | Scheduled stats computation (60-min interval); gRPC-only consumer; writes pre-aggregated results to ClickHouse `experiment_results`. Exposes pure query builders under `queries::{aggregation, ratio, funnel, preview}` (experiment-scoped vs day-bucketed preview); shared `jsonlogic_to_sql` translator for metric `where_clause` filters | Binary |
 | `stitchd-schedule-service` | Scheduled-change lifecycle (`flag_lifecycle_20260604`); gRPC-only consumer (mirrors stats-service's tokio-interval loop, default 60 s). Claims due rows from PG `scheduled_changes` (`FOR UPDATE SKIP LOCKED`, restart-safe + idempotent, missed-tick catch-up) and dispatches each to the owning service's canonical mutation RPC: flag → flag-service `MutateFlag`, experiment → experimentation-service `TransitionExperiment`, segment → segmentation-service `UpdateAdminSegment`. One-shot + recurring (RRULE + IANA-tz, DST-aware); honors the experiment lock + transition validity at fire time; holds no domain logic of its own. Also serves the gRPC `ScheduleService` (create/list/get/cancel/pause/resume) + health/metrics HTTP. | Binary |
@@ -120,7 +120,7 @@ The system is decomposed into eight Cargo workspace crates, each a standalone gR
 | `stitchd-sdk-rust` | Server-side Rust SDK — in-process flag evaluation via `SdkClient::evaluate(&[EvalRequest], TraceLevel)`, which delegates to `stitchd-core::evaluation::evaluate_flag` (library; naming convention: `stitchd-sdk-{lang}`) | Library |
 | `stitchd-core` | Domain model, rule engine, segmentation logic, hashing, ID types. Hosts the SOLE flag-evaluation orchestrator `evaluation::evaluate_flag(...)` (post-`flag_eval_unify_20260522`) — preview path + SDK path both delegate here. Owns the canonical `HashSelector` / `HashInputSpec` / `TraceLevel` / `ListMembershipIndex` / `EvalOutcome` / `EvaluationTrace` / `FlagEvaluationResult` types | Library |
 | `stitchd-db` | Database access layer (sqlx repositories + ClickHouse) | Library |
-| `stitchd-proto` | Protobuf definitions and generated tonic stubs for all services. `flags.v1.PercentageAllocation` carries the canonical `hash_inputs: repeated HashSelector` at tag 3 (post-`flag_eval_unify_20260522`); legacy `context_hash_specs` map at tag 1 is retired | Library |
+| `stitchd-proto` | Protobuf definitions and generated tonic stubs for all services. `flags.v1.PercentageAllocation` carries the canonical `hash_inputs: repeated HashSelector` (sole percentage-hash input). The legacy `context_hash_specs` map + `ContextHashSpec` message were **removed** and tags compacted in `clean_cutover_20260609` (system not live — no wire compatibility kept); `analytics.TrackEvent`/`EventFiring` reserved tags and `segments.AdminSegment` always-empty `user_list`/`excluded_keys` were likewise removed + compacted | Library |
 | `xtask` | Build tool: mdBook docs generation, tool installation | Binary |
 
 Internal communication is exclusively gRPC (tonic). `stitchd-server` (previous monolith) has been removed. The `stitchd-events` crate was renamed to `stitchd-event-writer` as part of the `boundaries_20260518` refactor; all references to the old name are retired.
@@ -133,7 +133,7 @@ Internal communication is exclusively gRPC (tonic). `stitchd-server` (previous m
 | REST API | Axum 0.8 (in `stitchd-gateway`) |
 | Internal RPC | gRPC (tonic 0.14 + tonic-prost 0.14 + prost 0.14 — codec split since 0.14; `tonic_prost_build::configure()` in build scripts) |
 | Config / Flag Store | PostgreSQL 16+ (sqlx 0.8) — offline cache (`.sqlx/`) for compile-time safety in CI |
-| DB Extensions | pg_partman (for segment list partitioning) |
+| DB Extensions | pgcrypto (UUID + crypto helpers) |
 | List-Entry Store | ScyllaDB 6+ (scylla 1.6, Cassandra-compatible CQL) — wide-row tables per segment; LWT-based generation swap; keyspace renamed `stitchd_segments` (was `stitchd`) |
 | Events / Experiments Store | ClickHouse 24+ via `clickhouse 0.15` driver (insert API is async + generic over `<Row>`) |
 | Human Auth | JWT (jsonwebtoken 10) + OAuth2/OIDC (openidconnect 4 — endpoint type-state) + SAML 2.0 (quick-xml 0.40 + flate2) |
@@ -285,7 +285,7 @@ Key invariants:
 
 ## PostgreSQL Index Layer
 
-Defined in Postgres V1 Baseline (`20260525000001_v1_baseline.sql`):
+Defined in Postgres V1 Baseline (`20260609000001_v1_baseline.sql`):
 
 | Index | Purpose |
 |---|---|
@@ -298,13 +298,12 @@ Production deploys must run `CREATE INDEX CONCURRENTLY` manually outside a trans
 
 ## ClickHouse Schema
 
-**Tables and materialized views as of 2026-05-27 (post-`schema_cutover_20260525`):**
+**Tables and materialized views as of 2026-06-09 (post-`clean_cutover_20260609`):**
 
 | Table | Engine | Notes |
 |---|---|---|
-| `events` | MergeTree, monthly partitions | Legacy ingestion table |
-| `events_v2` | MergeTree, weekly `toMonday()` partitions | Optimized partition granularity. `contexts Array(Tuple(String, String))` carries multi-context attribution per firing; `metric_key LowCardinality(String)`, three nullable typed value columns (`value_bool / value_int / value_double`); `properties Map(String, String)`; `timestamp DateTime64(3, 'UTC')` + `occurred_at DateTime64(3, 'UTC')` |
-| `flag_evaluation_log` | MergeTree, weekly `toMonday()` partitions + TTL | Eval log. Columns: `env_id`, `flag_id`, `flag_key`, `variant_key`, `targeting_on` (Boolean, true when flag active), `matched_rule_id` (matched rule UUID), `evaluated_at`, `context_type`, `context_key`, `params_json` |
+| `events` | MergeTree, weekly `toMonday()` partitions | Single canonical raw-events table (the legacy duplicate / `events_v2` are retired — collapsed to one `events` in `clean_cutover_20260609`). `contexts Array(Tuple(String, String))` carries multi-context attribution per firing; `metric_key LowCardinality(String)`, three nullable typed value columns (`value_bool / value_int / value_double`); `properties Map(String, String)`; `timestamp DateTime64(3, 'UTC')` + `occurred_at DateTime64(3, 'UTC')` |
+| `flag_evaluation_log` | MergeTree, weekly `toMonday()` partitions + TTL | Eval log. Columns: `env_id`, `flag_id`, `flag_key`, `variant_key`, `targeting_on` (Boolean, true when flag active), `matched_rule_id` (matched rule UUID), `evaluated_at`, `context_type`, `context_key`, `params_json`, `evaluation_id` (UUID, one per multi-context evaluation bundle) |
 | `events_experiment_daily` | AggregatingMergeTree | Pre-aggregated experiment stats by `(env_id, experiment_id, variant_key, metric_key, day)` |
 | `events_experiment_daily_mv` | Materialized View | Auto-populates `events_experiment_daily` on `events` insert using `*State` combiners |
 | `experiment_results` | MergeTree | Pre-computed per-experiment results; owned by `stitchd-analytics-service`; written by `stitchd-stats-service`. `context_type` column (default 'user') supports per-context-type results. `sequential_result String` JSON blob (per-variant always-valid p / anytime-CI; `seqtest_20260603`) sits alongside `frequentist_result`/`bayesian_result` |
@@ -330,22 +329,28 @@ Production deploys must run `CREATE INDEX CONCURRENTLY` manually outside a trans
 
 ## Database Migrations (V1 Baselines)
 
-All historical migrations (PostgreSQL, ClickHouse, ScyllaDB) were collapsed into single V1 baseline schemas during the `schema_cutover_20260525` track:
+All migrations (PostgreSQL, ClickHouse, ScyllaDB) are collapsed into a **single fresh V1
+baseline per store**. First done in `schema_cutover_20260525`; the post-baseline incrementals
+were then folded into a **new dated baseline** in `clean_cutover_20260609` (clean cutover —
+system not live; **no migration path / no backward compatibility**). Each store now has exactly
+one baseline file; all prior incremental migration files were deleted.
 
-- **PostgreSQL:** Defined in `crates/stitchd-db/migrations/20260525000001_v1_baseline.sql` (plus a partial unique constraint fix in `20260525000002_fix_flag_key_unique_partial.sql`). Retired `segment_rules` table and `context_hash_specs` dual-write columns.
-- **ClickHouse:** Defined in `crates/stitchd-event-writer/migrations/20260525000001_v1_baseline.sql`. Table `flag_evaluation_log_v2` renamed back to `flag_evaluation_log`.
-- **ScyllaDB:** Defined in `crates/stitchd-db/scylla-migrations/0001_v1_baseline.cql`.
-
-Post-baseline incremental migrations:
-- `crates/stitchd-db/migrations/20260602000001_exclusion_groups.sql` (`xexp_interaction_20260602`): adds the `exclusion_groups` table (per-env, immutable `salt`, version/audit/soft-delete; partial unique index on `(env_id, name) WHERE deleted_at IS NULL`) and the nullable `exclusion_group_id` + `group_bucket_lo/hi` columns on `experiments` (CHECK `0 <= lo < hi <= 10000` or both NULL) and snapshot columns on `experiment_iterations`.
-- `crates/stitchd-event-writer/migrations/20260602000002_experiment_interactions.sql` (`xexp_interaction_20260602`): the ClickHouse `experiment_interactions` table (registered in the `event_writer::migrations` MIGRATIONS array so it auto-applies on analytics-service boot).
-- `crates/stitchd-event-writer/migrations/20260602000002_experiment_interactions.sql` was **rewritten in place** in `nway_interaction_20260603` (clean cutover — system not live) to the unified N-way schema (`experiment_ids Array(UUID)` + `interaction_order` + `term` + N-D `cell_stats` + `df` + Bayesian columns), now `ReplacingMergeTree(computed_at)` + 30-day TTL (readers use `FINAL`). The separate `20260602000005_interaction_insufficient_data.sql` ALTER was removed (folded into the table). Assumes a fresh ClickHouse DB; no backfill.
-- `crates/stitchd-db/migrations/20260604000001_lifecycle_automation.sql` (`flag_lifecycle_20260604`):
-  - `scheduled_changes` — `(entity_type, entity_id, env_id, mutation_payload JSONB, schedule_kind, scheduled_at, rrule, tz, next_run_at, last_run_at, status, created_by)` with a partial index on `next_run_at WHERE status='active'` (the scheduler's due-query). One-shot rows carry `scheduled_at`; recurring rows carry `rrule` + IANA `tz` and recompute `next_run_at`. Soft-delete + `version` + named CHECK constraints per baseline convention.
-  - `scheduled_change_runs` — per-fire history (outcome + detail, e.g. the `dependency_exists:`/skip reason).
-  - `flag_prerequisites` — `(flag_id, prerequisite_flag_id, required_variant_id)` edge rows; plus `feature_flags.fallback_variant_id UUID REFERENCES variants(id)` (the gate's fallback).
-  - `entity_dependencies` — generic dependency edge table (flag→flag prerequisite edges populated here; flag→segment / segment→segment are scanned authoritatively at delete time).
-- `crates/stitchd-db/migrations/20260604000002_experiment_start_prerequisites.sql` (`flag_lifecycle_20260604`): `experiment_start_prerequisites` — `kind` CHECK (`flag_variant` sets flag_id+variant_id, `experiment_done` sets prerequisite_experiment_id; `chk_experiment_start_prereq_shape` keeps each kind's columns mutually exclusive). Enforced on manual AND scheduled experiment start; also drives experiment→experiment delete-blocking.
+- **PostgreSQL:** `crates/stitchd-db/migrations/20260609000001_v1_baseline.sql` — the single
+  baseline. It reproduces the exact schema the prior 2026-05-25 baseline + nine incrementals
+  produced (verified by a round-trip `pg_dump` diff): flag-key partial-unique constraint, dead
+  `frozen` column absent, `exclusion_groups` (+ `unit_context_type`), lifecycle automation
+  (`scheduled_changes`, `scheduled_change_runs`, `flag_prerequisites`,
+  `feature_flags.fallback_variant_id`, `entity_dependencies`), `experiment_start_prerequisites`,
+  bandit foundation + lifecycle (`bandit_*` columns, `bandit_allocation_runs`, `bandit_campaigns`),
+  and `idempotency_keys`. `segment_rules` + `context_hash_specs` dual-write columns remain retired.
+- **ClickHouse:** `crates/stitchd-event-writer/migrations/20260609000001_v1_baseline.sql` — the
+  single baseline, applied by the embedded `event_writer::migrations` runner (the `MIGRATIONS`
+  array holds this one entry). It contains the single `events` table, `flag_evaluation_log`
+  (+ `evaluation_id`), `experiment_results` (+ `sequential_result`), `experiment_assignments`
+  (+ `_mv`), `events_experiment_daily` (+ `_mv`), the N-way `experiment_interactions` table, and
+  the `experiment_iterations_active` dictionary. The dead pre-cutover
+  `crates/stitchd-db/clickhouse-migrations/` directory was removed.
+- **ScyllaDB:** `crates/stitchd-db/scylla-migrations/0001_v1_baseline.cql` (single baseline; no incrementals).
 
 The experimentation-service proto gained additive RPCs (`CreateExclusionGroup`/`ListExclusionGroups`/`UpdateExclusionGroup`/`DeleteExclusionGroup`/`AssignExperimentToGroup`/`UnassignExperiment`/`GetExperimentInteractions`); `flags.v1.PercentageAllocation` gained an additive `exclusion_gate` (group_salt + context_type + bucket_lo/hi) carried on the existing definition-sync path.
 

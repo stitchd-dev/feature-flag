@@ -41,37 +41,27 @@ message AllocationBucket {
 // Percentage allocation: deterministic hash over context keys/params.
 // hash(targeted_keys, flag_key, project_id, environment_id) mod 100_000
 message PercentageAllocation {
-  // [LEGACY] Context types and their parameter names to include in the hash.
-  // An empty parameter list means use the context key only.
-  //
-  // Retained for backwards compatibility during the dual-schema cutover of
-  // `flag_eval_unify_20260522` (Phase 3 added the new `hash_inputs` field
-  // below; Phase 5/6 removes this field once every caller has migrated).
-  // New code MUST prefer `hash_inputs` — it preserves selector ordering and
-  // supports cross-context hashing (multiple context types in a single
-  // selector list, each contributing a key or named parameter).
-  map<string, ContextHashSpec> context_hash_specs = 1;
-  repeated AllocationBucket   buckets             = 2;
-  // [NEW — Phase 3 of flag_eval_unify_20260522] Ordered selector list.
+  repeated AllocationBucket buckets = 1;
+  // Ordered selector list (the canonical percentage-hash input).
   // Selector order is significant for hash stability. Each selector resolves
   // either to a context's `key` (HashSelector.context_key) or to a named
   // parameter on a context (HashSelector.context_parameter). Empty list is
   // invalid at the API boundary; the server-side validator rejects it. See
   // `stitchd-core::evaluation::types::HashInputSpec` for the canonical
   // domain representation.
-  repeated HashSelector hash_inputs = 3;
-  // [ADDITIVE] Optional exclusion gate. When present, the experiment/flag rule
+  repeated HashSelector hash_inputs = 2;
+  // Optional exclusion gate. When present, the experiment/flag rule
   // only applies to contexts whose group-salt hash bucket falls within
   // [bucket_lo, bucket_hi). Used by mutually-exclusive experiment groups so
   // that overlapping experiments carve out disjoint slices of traffic.
-  optional ExclusionGate exclusion_gate = 4;
-  // [ADDITIVE — bandit_20260608] Optional real-time bandit model. When present,
+  optional ExclusionGate exclusion_gate = 3;
+  // Optional real-time bandit model (bandit_20260608). When present,
   // the rule's variant is drawn per-context from the snapshot-resident reward
   // posteriors (a Thompson draw seeded by the unit context's key) INSTEAD of the
   // static bucket→weight allocation. Mirrors `exclusion_gate`: pure rule data
   // that rides the snapshot, sampled with zero DB lookup at eval time. Absent on
   // every non-realtime-bandit rule, which keeps the static eval path unchanged.
-  optional RealtimeBanditModel realtime_bandit = 5;
+  optional RealtimeBanditModel realtime_bandit = 4;
 }
 
 // [ADDITIVE — bandit_20260608] Snapshot-resident reward model for a real-time
@@ -203,11 +193,6 @@ message ExclusionGate {
   // of this type is present in the evaluated bundle, the context is held out
   // (not enrolled) — a missing randomization unit cannot be bucketed.
   string context_type = 4;
-}
-
-message ContextHashSpec {
-  // If empty, only the context `key` is hashed.
-  repeated string parameter_names = 1;
 }
 
 // One contributor to the percentage-allocation hash input. Mirrors the

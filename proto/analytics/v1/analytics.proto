@@ -45,27 +45,20 @@ message TrackEvent {
   // Typed metric value; must match the registered event's value_type.
   // Optional because some event_definitions are pure occurrence markers
   // (count-only) where value carries no information.
-  MetricValue            value        = 4;
+  MetricValue            value        = 2;
   // Arbitrary per-event metadata. Used by metric filters / on-field
   // aggregations downstream. Empty map is fine.
-  map<string, string>    properties   = 5;
+  map<string, string>    properties   = 3;
   // RFC 3339 client-side wall-clock timestamp. Optional — when absent,
   // analytics-service uses ingestion (server) time. Lets SDKs replay
   // buffered offline events with their original firing time.
-  optional string        occurred_at  = 6;
+  optional string        occurred_at  = 4;
   // Multi-dimensional attribution as a flat type→key map. One event
   // can carry attribution to multiple dimensions at once (e.g.
   // `{user: alice, account: acme, session: s99}`) and the underlying
   // ClickHouse row stores them all in `Array(Tuple(String, String))`.
   // Server requires at least one entry per event.
-  map<string, string>    contexts     = 7;
-
-  // Field tags 2 and 3 used to carry the legacy `context_type` /
-  // `context_key` singular pair. Removed in favour of the `contexts`
-  // map; reserved so a future field never repurposes those tags
-  // (proto wire-compat hygiene).
-  reserved 2, 3;
-  reserved "context_type", "context_key";
+  map<string, string>    contexts     = 5;
 }
 
 message TrackEventsRequest {
@@ -528,25 +521,19 @@ message GetEventFiringsRequest {
 message EventFiring {
   // Serialised JSON of the typed `value` oneof — one of `true` / `42` /
   // `1.5`. Empty string when no value (occurrence-only event).
-  string value_json      = 3;
+  string value_json      = 1;
   // Serialised JSON object of the `properties` map. `{}` when the row had
   // no properties.
-  string properties_json = 4;
+  string properties_json = 2;
   // Client-side wall-clock time (RFC 3339 UTC).
-  string occurred_at     = 5;
+  string occurred_at     = 3;
   // Server-side ingestion time (RFC 3339 UTC).
-  string ingested_at     = 6;
+  string ingested_at     = 4;
   // Full multi-context attribution for this firing as a flat
   // type→key map. Mirrors the `TrackEvent.contexts` shape on the
   // write side. Always populated (server fails events with no
   // contexts at ingestion).
-  map<string, string> contexts = 7;
-
-  // Field tags 1 and 2 used to carry the legacy `context_type` /
-  // `context_key` singular pair (always equal to `contexts[0]`).
-  // Removed; reserved so a future field never repurposes those tags.
-  reserved 1, 2;
-  reserved "context_type", "context_key";
+  map<string, string> contexts = 5;
 }
 
 message GetEventFiringsResponse {

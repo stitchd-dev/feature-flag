@@ -1,10 +1,14 @@
 -- =============================================================================
--- V1 Baseline — stitchd-event-writer ClickHouse schema (post-cutover 2026-05-25)
--- Synthesised from migrations 20260419000001 through 20260521000005.
+-- V1 Baseline — stitchd-event-writer ClickHouse schema (clean cutover 2026-06-09)
 --
--- events/events_v2 consolidated under `events` (post-rename state).
--- flag_evaluation_log_v2 renamed to flag_evaluation_log.
--- One-shot backfill INSERTs (20260516000006, 20260521000004) omitted.
+-- Single consolidated ClickHouse baseline representing the FINAL schema state.
+-- The system is not live: this collapses the prior 2026-05-25 CH baseline plus
+-- the two post-baseline migrations (experiment_interactions N-way table;
+-- flag_evaluation_log.evaluation_id column) into one fresh baseline.
+-- No migration path / no back-compat.
+--
+-- Single canonical `events` table (the legacy duplicate raw-events table is retired).
+-- Single canonical `flag_evaluation_log` table (its legacy duplicate is retired).
 -- =============================================================================
 
 -- =============================================================================
@@ -87,6 +91,10 @@ PARTITION BY toYYYYMM(day)
 ORDER BY (env_id, experiment_id, variant_key, metric_key, day);
 
 -- Flag evaluation log for experimentation attribution; 90-day TTL.
+-- evaluation_id stamps one UUID per multi-context evaluation bundle so the
+-- per-context-type sibling rows can be grouped (experiment_assignments_mv
+-- cross-context attribution). Written by EvalLogRow / the SDK eval-log ingest
+-- path; non-nullable UUID to match EvalLogRow.evaluation_id.
 CREATE TABLE IF NOT EXISTS flag_evaluation_log
 (
     env_id          UUID,
@@ -98,7 +106,8 @@ CREATE TABLE IF NOT EXISTS flag_evaluation_log
     evaluated_at    DateTime64(3, 'UTC'),
     context_type    String,
     context_key     String,
-    params_json     String
+    params_json     String,
+    evaluation_id   UUID DEFAULT generateUUIDv4()
 )
 ENGINE = MergeTree()
 PARTITION BY toMonday(evaluated_at)
@@ -126,6 +135,8 @@ ORDER BY (experiment_id, iteration_id, context_type, context_key)
 TTL toDateTime(assigned_at) + INTERVAL 180 DAY DELETE;
 
 -- Per-variant, per-metric statistical results for experiment iterations.
+-- sequential_result holds the per-variant always-valid p / anytime-CI JSON blob
+-- (seqtest_20260603) alongside frequentist_result / bayesian_result.
 CREATE TABLE IF NOT EXISTS experiment_results
 (
     env_id             UUID,
@@ -144,6 +155,37 @@ CREATE TABLE IF NOT EXISTS experiment_results
 )
 ENGINE = MergeTree()
 ORDER BY (env_id, experiment_id, variant_key, metric_key, iteration_id);
+
+-- N-way cross-experiment interaction statistics. Each candidate tuple emits a
+-- full hierarchical decomposition (one row per `term`: main / 2way / 3way…).
+-- experiment_ids is REQUIRED in the sort key so a lower-order term shared by
+-- multiple candidate tuples does not collide under ReplacingMergeTree FINAL.
+-- ReplacingMergeTree(computed_at): the 60-min sweep re-inserts each tick;
+-- READERS MUST USE `FINAL` (or argMax). 30-day TTL bounds stale rows.
+CREATE TABLE IF NOT EXISTS experiment_interactions
+(
+    env_id               UUID,
+    experiment_ids       Array(UUID),
+    interaction_order    UInt8,
+    term                 String,
+    context_type         LowCardinality(String),
+    metric_key           LowCardinality(String),
+    shared_count         UInt64,
+    cell_stats           String,
+    interaction_estimate Float64,
+    p_value              Float64,
+    df                   UInt32,
+    significant          Bool,
+    insufficient_data    Bool DEFAULT false,
+    bayes_prob           Float64,
+    bayes_expected       Float64,
+    bayes_ci_low         Float64,
+    bayes_ci_high        Float64,
+    computed_at          DateTime64(3, 'UTC')
+)
+ENGINE = ReplacingMergeTree(computed_at)
+ORDER BY (env_id, interaction_order, experiment_ids, context_type, metric_key, term)
+TTL toDateTime(computed_at) + INTERVAL 30 DAY;
 
 -- =============================================================================
 -- DICTIONARIES (must precede any Materialized View that references them)

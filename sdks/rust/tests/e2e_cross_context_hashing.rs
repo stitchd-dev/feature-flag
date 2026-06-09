@@ -233,7 +233,6 @@ fn cross_context_rule_dto() -> Vec<HashSelectorJson> {
 /// forwards to the flag-service's `MutateFlag` gRPC.
 fn build_proto_flag(hash_inputs: &[HashSelectorJson]) -> FeatureFlag {
     let alloc = PercentageAllocation {
-        context_hash_specs: HashMap::new(),
         buckets: vec![
             AllocationBucket {
                 variant_key: "on".to_string(),
@@ -411,8 +410,7 @@ mod stitchd_flag_service_mapping {
                         .filter_map(proto_hash_selector_to_target)
                         .collect()
                 } else {
-                    // Legacy ContextHashSpec map fallback — not exercised
-                    // by this test (all corpus rules use `hash_inputs`).
+                    // No hash_inputs → no targets.
                     Vec::new()
                 };
                 let weights = alloc
