@@ -1,11 +1,8 @@
 //! MFA repository — challenges, TOTP enable/disable, recovery codes.
 //!
 //! Provides:
-//! - [`MfaRepository`] trait with full Phase 4 operations
+//! - [`MfaRepository`] trait with full MFA operations
 //! - [`PgMfaRepository`] Postgres implementation
-//!
-//! The legacy [`MfaChallengeRepository`] trait is preserved as a type alias so
-//! that existing callers in Phase 3 continue to compile unchanged.
 
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
@@ -97,24 +94,6 @@ pub trait MfaRepository: Send + Sync {
         &self,
         token_hash: &str,
     ) -> Result<Option<UserId>, RepositoryError>;
-}
-
-/// Legacy alias kept for backward compatibility with Phase 3.
-///
-/// Phase 3's `/auth/login` handler uses this narrower trait to create challenges.
-/// Now backed by the same [`PgMfaRepository`].
-#[async_trait]
-pub trait MfaChallengeRepository: Send + Sync {
-    /// Create a short-lived challenge for `user_id`.
-    ///
-    /// Returns `(challenge_token_hash, raw_token)`:
-    /// - `challenge_token_hash` is stored in the DB.
-    /// - `raw_token` is returned to the caller once.
-    async fn create_challenge(
-        &self,
-        user_id: UserId,
-        ttl_secs: i64,
-    ) -> Result<(String, String), RepositoryError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -343,50 +322,6 @@ impl MfaRepository for PgMfaRepository {
     }
 }
 
-/// Backward-compatible [`MfaChallengeRepository`] impl delegating to [`PgMfaRepository`].
-///
-/// Kept so that Phase 3 login handler code compiles unchanged while we transition
-/// to the richer [`MfaRepository`] trait.
-pub struct PgMfaChallengeRepository {
-    /// Shared Postgres connection pool.
-    pub pool: PgPool,
-}
-
-impl PgMfaChallengeRepository {
-    /// Construct a new repository bound to `pool`.
-    #[must_use]
-    pub const fn new(pool: PgPool) -> Self {
-        Self { pool }
-    }
-}
-
-#[async_trait]
-impl MfaChallengeRepository for PgMfaChallengeRepository {
-    async fn create_challenge(
-        &self,
-        user_id: UserId,
-        ttl_secs: i64,
-    ) -> Result<(String, String), RepositoryError> {
-        let (raw_token, token_hash) = generate_opaque_token();
-        let expires_at = Utc::now() + Duration::seconds(ttl_secs);
-
-        sqlx::query!(
-            r#"
-            INSERT INTO mfa_challenges (user_id, challenge_token_hash, expires_at)
-            VALUES ($1, $2, $3)
-            "#,
-            user_id.as_uuid(),
-            token_hash,
-            expires_at,
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(RepositoryError::Database)?;
-
-        Ok((token_hash, raw_token))
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Helper used by mfa.rs handler tests
 // ---------------------------------------------------------------------------
@@ -544,16 +479,6 @@ mod tests {
         repo.consume_recovery_code(user_id, "h").await.unwrap();
         let second = repo.consume_recovery_code(user_id, "h").await.unwrap();
         assert!(!second);
-    }
-
-    #[sqlx::test(migrations = "./migrations")]
-    async fn legacy_create_challenge_returns_hash_and_token(pool: PgPool) {
-        let user_id = seed_user(&pool).await;
-        let repo = PgMfaChallengeRepository::new(pool);
-        let (token_hash, raw_token) = repo.create_challenge(user_id, 300).await.unwrap();
-        assert!(!token_hash.is_empty());
-        assert!(!raw_token.is_empty());
-        assert_ne!(token_hash, raw_token);
     }
 
     #[test]

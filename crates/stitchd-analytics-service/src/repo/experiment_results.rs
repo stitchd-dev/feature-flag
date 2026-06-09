@@ -225,9 +225,8 @@ impl ClickHouseExperimentResultsRepository {
             recommendation: row.recommendation,
             computed_at: row.computed_at.timestamp_millis(),
             created_at: chrono::Utc::now().timestamp_millis(),
-            // Empty string is fine — the CH column has DEFAULT 'user' so
-            // legacy callers that don't supply context_type still get
-            // back-compat semantics on read.
+            // Empty string is fine — the CH column has DEFAULT 'user', so an
+            // unset context_type resolves to the default unit on read.
             context_type: row.context_type,
         })
     }

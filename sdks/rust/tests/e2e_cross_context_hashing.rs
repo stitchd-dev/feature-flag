@@ -410,8 +410,7 @@ mod stitchd_flag_service_mapping {
                         .filter_map(proto_hash_selector_to_target)
                         .collect()
                 } else {
-                    // Legacy ContextHashSpec map fallback — not exercised
-                    // by this test (all corpus rules use `hash_inputs`).
+                    // No hash_inputs → no targets.
                     Vec::new()
                 };
                 let weights = alloc

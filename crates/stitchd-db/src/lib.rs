@@ -17,11 +17,10 @@ pub mod stats_jobs;
 pub mod stats_schedule;
 
 pub use auth::{
-    AuthProviderRepository, AuthUserRepository, InviteRepository, MfaChallengeRepository,
-    MfaRepository, OrgMembershipRepository, OtpRepository, PgAuthProviderRepository,
-    PgAuthUserRepository, PgInviteRepository, PgMfaChallengeRepository, PgMfaRepository,
-    PgOrgMembershipRepository, PgOtpRepository, PgRefreshTokenRepository, RefreshTokenRepository,
-    challenge_token_hash,
+    AuthProviderRepository, AuthUserRepository, InviteRepository, MfaRepository,
+    OrgMembershipRepository, OtpRepository, PgAuthProviderRepository, PgAuthUserRepository,
+    PgInviteRepository, PgMfaRepository, PgOrgMembershipRepository, PgOtpRepository,
+    PgRefreshTokenRepository, RefreshTokenRepository, challenge_token_hash,
 };
 pub use error::RepositoryError;
 pub use repository::{
