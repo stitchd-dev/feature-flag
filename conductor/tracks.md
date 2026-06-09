@@ -99,5 +99,5 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [ ] Track: Clean Cutover — Final-State Consolidation (DB baselines + single `events` table + proto/API compat removal)
+## [x] Track: Clean Cutover — Final-State Consolidation (DB baselines + single `events` table + proto/API compat removal)
 *Link: [./conductor/tracks/clean_cutover_20260609/](./conductor/tracks/clean_cutover_20260609/)*
