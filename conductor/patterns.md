@@ -196,6 +196,16 @@ Last refreshed: 2026-05-27 (post schema_cutover_20260525 merge — added basis p
 
 - **Basis Points Rollout Precision:** Rollout allocations use integer basis points (`u32` where 1 = 0.01% precision, 10000 = 100%) rather than float percentages (`f64`). This allows exact integer validation (no floating-point epsilon/sum tolerance needed) and matches DB storage directly. (from: schema_cutover_20260525, archived 2026-05-25)
 
+- **Build a consolidated baseline from `pg_dump`, then VERIFY by round-trip diff:** To collapse N migrations into one baseline, apply all N to a scratch DB, `pg_dump --schema-only --no-owner --no-privileges --no-comments --exclude-table=_sqlx_migrations` → ground truth. Apply the candidate baseline to a *second* fresh DB, dump identically, and `diff` — zero diff proves functional equivalence. Far more robust than hand-folding ALTERs. (from: clean_cutover_20260609, archived 2026-06-09)
+
+- **`pg_dump` output needs two strips to run under sqlx:** (1) the psql `\restrict`/`\unrestrict` meta-commands are NOT SQL and error if sent to the server; (2) `SELECT pg_catalog.set_config('search_path','',false)` PERSISTS an empty session search_path that then breaks sqlx's `_sqlx_migrations` bookkeeping (`relation "_sqlx_migrations" does not exist`). Strip the whole `SET`/`set_config` preamble + backslash lines; all dump DDL is `public.`-qualified so none is needed. (from: clean_cutover_20260609, archived 2026-06-09)
+
+- **`sqlx database drop` fails on idle connections:** the dev DB can hold idle connections (`"database is being accessed by other users"`); run `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=... AND pid<>pg_backend_pid()` first. `scripts/reset_dev_db.sh` references NO individual migration filenames (PG via dir, CH via the `event_writer` embedded migrator, Scylla via xtask) — so swapping baselines needs no script edit. (from: clean_cutover_20260609, archived 2026-06-09)
+
+- **Proto TAG compaction is consumer-safe; only field REMOVAL isn't.** prost generates struct fields by NAME, so renumbering proto tags to remove `reserved` gaps breaks nothing in Rust (only wire compat, irrelevant when nothing is live). There are no checked-in generated `.rs` (tonic build.rs → OUT_DIR), so editing `.proto` + rebuild regenerates. Whole-tree grep for field consumers — the Rust SDK lives in `sdks/rust/`, NOT `crates/`, so crates-scoped greps miss it. (from: clean_cutover_20260609, archived 2026-06-09)
+
+- **A removed `sqlx::query!`/`query_scalar!` prunes its `.sqlx/query-*.json`:** after deleting a query macro, `cargo sqlx prepare` deletes the now-orphaned cache file — `git add` the deletion (CI `sqlx-check` verifies cache exactness). Run `cargo fmt` per-phase, not just at the end: non-fmt-compliant code committed mid-track only surfaces at the final `fmt --check` gate. (from: clean_cutover_20260609, archived 2026-06-09)
+
 ## Domain-Boundary Refactor Conventions
 *(from: domain_boundaries_20260530, 2026-05-30)*
 
