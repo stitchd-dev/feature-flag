@@ -545,7 +545,6 @@ pub fn domain_flag_rule_to_proto<S: BuildHasher>(
                 .collect();
 
             Some(Output::Allocation(PercentageAllocation {
-                context_hash_specs: HashMap::new(),
                 buckets,
                 hash_inputs,
                 // Phase 2 wires the exclusion gate through core↔proto mapping.
@@ -620,7 +619,6 @@ pub fn build_feature_flag_proto(
             rule_payload: catch_all_condition,
             output: Some(stitchd_proto::flags::v1::flag_rule::Output::Allocation(
                 PercentageAllocation {
-                    context_hash_specs: Default::default(),
                     buckets,
                     hash_inputs,
                     exclusion_gate: None,
@@ -664,7 +662,6 @@ mod tests {
         rule_engine::types::{ConditionExpr, PercentageTarget, Rule, RuleOutput, TargetField},
         variants::{FlagValueType as DomainFVT, VariantValue},
     };
-    use stitchd_proto::flags::v1::ContextHashSpec;
 
     fn make_variant_id() -> VariantId {
         VariantId::new()
@@ -904,7 +901,6 @@ mod tests {
 
         let proto = domain_flag_rule_to_proto(&flag_rule, &key_map);
         if let Some(stitchd_proto::flags::v1::flag_rule::Output::Allocation(alloc)) = proto.output {
-            assert!(alloc.context_hash_specs.is_empty());
             assert_eq!(alloc.buckets.len(), 1);
             assert_eq!(alloc.buckets[0].variant_key, "treatment");
             assert_eq!(alloc.buckets[0].weight_bp, 10000);
@@ -940,7 +936,6 @@ mod tests {
 
         let proto = domain_flag_rule_to_proto(&flag_rule, &key_map);
         if let Some(stitchd_proto::flags::v1::flag_rule::Output::Allocation(alloc)) = proto.output {
-            assert!(alloc.context_hash_specs.is_empty());
             assert_eq!(alloc.hash_inputs.len(), 1);
         } else {
             panic!("expected Allocation output");
@@ -948,10 +943,9 @@ mod tests {
     }
 
     #[test]
-    fn domain_percentage_populates_hash_inputs_and_clears_legacy_map() {
-        // Phase 5/6 cutover: domain-to-proto conversion of
-        // `RuleOutput::Percentage` populates only `hash_inputs`; the legacy
-        // `context_hash_specs` map is always empty.
+    fn domain_percentage_populates_hash_inputs() {
+        // Domain-to-proto conversion of `RuleOutput::Percentage` populates the
+        // canonical `hash_inputs` selector list in declaration order.
         let vid = make_variant_id();
         let mut key_map = HashMap::new();
         key_map.insert(vid, "t".to_string());
@@ -1002,25 +996,15 @@ mod tests {
             }
             _ => panic!("expected ContextParameter"),
         }
-        // Legacy field must be empty after cutover.
-        assert!(alloc.context_hash_specs.is_empty());
     }
 
     #[test]
     fn proto_to_domain_reads_hash_inputs_preserving_order() {
         // `hash_inputs` is the sole authoritative field; selector order is
-        // preserved end-to-end. `context_hash_specs` is ignored.
+        // preserved end-to-end.
         let vid = make_variant_id();
         let variant_map: HashMap<String, VariantId> =
             [("t".to_string(), vid)].into_iter().collect();
-
-        let mut legacy_map = HashMap::new();
-        legacy_map.insert(
-            "z_other".to_string(),
-            ContextHashSpec {
-                parameter_names: vec!["ignored".to_string()],
-            },
-        );
 
         let proto = ProtoFlagRule {
             rule_payload: serde_json::to_vec(
@@ -1029,7 +1013,6 @@ mod tests {
             .unwrap(),
             output: Some(stitchd_proto::flags::v1::flag_rule::Output::Allocation(
                 PercentageAllocation {
-                    context_hash_specs: legacy_map,
                     buckets: vec![AllocationBucket {
                         variant_key: "t".to_string(),
                         weight_bp: 10000,
@@ -1075,19 +1058,10 @@ mod tests {
 
     #[test]
     fn proto_to_domain_empty_hash_inputs_yields_empty_targets() {
-        // After context_hash_specs fallback removal, a proto with only the
-        // legacy map and no hash_inputs produces an empty targets vec.
+        // A proto allocation with no hash_inputs produces an empty targets vec.
         let vid = make_variant_id();
         let variant_map: HashMap<String, VariantId> =
             [("t".to_string(), vid)].into_iter().collect();
-
-        let mut legacy_map = HashMap::new();
-        legacy_map.insert(
-            "user".to_string(),
-            ContextHashSpec {
-                parameter_names: vec![],
-            },
-        );
 
         let proto = ProtoFlagRule {
             rule_payload: serde_json::to_vec(
@@ -1096,7 +1070,6 @@ mod tests {
             .unwrap(),
             output: Some(stitchd_proto::flags::v1::flag_rule::Output::Allocation(
                 PercentageAllocation {
-                    context_hash_specs: legacy_map,
                     buckets: vec![AllocationBucket {
                         variant_key: "t".to_string(),
                         weight_bp: 10000,
@@ -1117,7 +1090,7 @@ mod tests {
         };
         assert!(
             targets.is_empty(),
-            "context_hash_specs fallback is removed; empty hash_inputs → empty targets"
+            "empty hash_inputs → empty targets"
         );
     }
 

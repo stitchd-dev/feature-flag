@@ -6446,7 +6446,6 @@ mod tests {
             rules: vec![FlagRule {
                 rule_payload: vec![],
                 output: Some(Output::Allocation(PercentageAllocation {
-                    context_hash_specs: Default::default(),
                     buckets: vec![
                         AllocationBucket {
                             variant_key: "a".to_string(),

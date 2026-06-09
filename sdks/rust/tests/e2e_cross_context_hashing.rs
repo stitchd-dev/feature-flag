@@ -233,7 +233,6 @@ fn cross_context_rule_dto() -> Vec<HashSelectorJson> {
 /// forwards to the flag-service's `MutateFlag` gRPC.
 fn build_proto_flag(hash_inputs: &[HashSelectorJson]) -> FeatureFlag {
     let alloc = PercentageAllocation {
-        context_hash_specs: HashMap::new(),
         buckets: vec![
             AllocationBucket {
                 variant_key: "on".to_string(),

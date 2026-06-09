@@ -83,7 +83,6 @@ impl MembershipBatchFetcher for NoopFetcher {
 /// trace fields, not the synthetic `VariantId`s.
 fn cross_context_corpus() -> (FeatureFlag, Flag) {
     let alloc = PercentageAllocation {
-        context_hash_specs: HashMap::new(),
         buckets: vec![
             AllocationBucket {
                 variant_key: "control".into(),

@@ -42,7 +42,6 @@ mod compilation_tests {
         // vec — exercising both the field name and the default path.
         let alloc = flags::v1::PercentageAllocation::default();
         assert!(alloc.hash_inputs.is_empty());
-        assert!(alloc.context_hash_specs.is_empty());
     }
 
     #[test]
@@ -92,22 +91,13 @@ mod compilation_tests {
     }
 
     #[test]
-    fn percentage_allocation_round_trip_with_dual_schema_state() {
+    fn percentage_allocation_round_trip_with_hash_inputs() {
         use flags::v1::hash_selector::Selector;
         use prost::Message;
 
-        // Build a PercentageAllocation carrying BOTH legacy and new fields —
-        // this models the Phase-3 dual-schema state the producer side will
-        // continue to emit until Phase 5/6 retires the legacy map.
-        let mut legacy: std::collections::HashMap<String, flags::v1::ContextHashSpec> =
-            std::collections::HashMap::new();
-        legacy.insert(
-            "user".to_string(),
-            flags::v1::ContextHashSpec {
-                parameter_names: vec!["plan".to_string()],
-            },
-        );
-
+        // PercentageAllocation carries the canonical ordered `hash_inputs`
+        // selector list plus its buckets (post clean cutover — the legacy
+        // `context_hash_specs` map was removed).
         let new_inputs = vec![
             flags::v1::HashSelector {
                 selector: Some(Selector::ContextKey(flags::v1::ContextKeySelector {
@@ -125,7 +115,6 @@ mod compilation_tests {
         ];
 
         let original = flags::v1::PercentageAllocation {
-            context_hash_specs: legacy,
             buckets: vec![flags::v1::AllocationBucket {
                 variant_key: "on".to_string(),
                 weight_bp: 10000,
@@ -139,15 +128,6 @@ mod compilation_tests {
         original.encode(&mut buf).expect("encode");
         let decoded = flags::v1::PercentageAllocation::decode(&buf[..]).expect("decode");
 
-        // Both schemas round-trip identically.
-        assert_eq!(decoded.context_hash_specs.len(), 1);
-        assert_eq!(
-            decoded
-                .context_hash_specs
-                .get("user")
-                .map(|s| s.parameter_names.as_slice()),
-            Some(&["plan".to_string()][..])
-        );
         assert_eq!(decoded.hash_inputs.len(), 2);
         match &decoded.hash_inputs[0].selector {
             Some(Selector::ContextKey(s)) => assert_eq!(s.context_type, "application"),
@@ -161,39 +141,6 @@ mod compilation_tests {
             other => panic!("hash_inputs[1] unexpected: {other:?}"),
         }
         assert_eq!(decoded.buckets.len(), 1);
-    }
-
-    #[test]
-    fn percentage_allocation_legacy_only_payload_decodes_with_empty_hash_inputs() {
-        // Wire forward-compatibility: an older sender that hasn't migrated yet
-        // emits `context_hash_specs` + `buckets` but NO `hash_inputs`. The
-        // newer receiver must decode that payload cleanly with
-        // `hash_inputs == []`.
-        use prost::Message;
-
-        let mut legacy: std::collections::HashMap<String, flags::v1::ContextHashSpec> =
-            std::collections::HashMap::new();
-        legacy.insert(
-            "user".to_string(),
-            flags::v1::ContextHashSpec {
-                parameter_names: vec![],
-            },
-        );
-        let sender = flags::v1::PercentageAllocation {
-            context_hash_specs: legacy,
-            buckets: vec![flags::v1::AllocationBucket {
-                variant_key: "treatment".to_string(),
-                weight_bp: 10000,
-            }],
-            hash_inputs: vec![],
-            exclusion_gate: None,
-            realtime_bandit: None,
-        };
-        let mut buf = Vec::new();
-        sender.encode(&mut buf).expect("encode");
-        let decoded = flags::v1::PercentageAllocation::decode(&buf[..]).expect("decode");
-        assert!(decoded.hash_inputs.is_empty());
-        assert_eq!(decoded.context_hash_specs.len(), 1);
     }
 
     #[test]

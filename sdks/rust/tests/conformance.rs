@@ -23,8 +23,9 @@ use stitchd_core::id::{RuleId, SegmentId, VariantId};
 use stitchd_core::rule_engine::condition::Condition;
 use stitchd_core::rule_engine::types::{ConditionExpr, Rule, RuleOutput};
 use stitchd_proto::flags::v1::{
-    AllocationBucket, ContextHashSpec, FeatureFlag, FlagRule, PercentageAllocation, Variant,
-    VariantValue, flag_rule::Output as ProtoOutput, variant_value::Value as VVal,
+    AllocationBucket, ContextKeySelector, ContextParameterSelector, FeatureFlag, FlagRule,
+    HashSelector, PercentageAllocation, Variant, VariantValue, flag_rule::Output as ProtoOutput,
+    hash_selector::Selector as HashSel, variant_value::Value as VVal,
 };
 use stitchd_proto::sdk::v1::SyncDefinitionsResponse;
 use stitchd_proto::segments::v1::{ListSegmentMeta, RuleSegment};
@@ -344,15 +345,37 @@ fn fixture_condition_to_expr(cond: &FixtureCondition) -> ConditionExpr {
 }
 
 fn build_percentage_allocation(rollout: &FixturePercentageRollout) -> PercentageAllocation {
-    let mut context_hash_specs: HashMap<String, ContextHashSpec> = HashMap::new();
+    // Build the canonical ordered `hash_inputs` selector list directly
+    // (context_type ASC, parameter ASC within type) — the single authoritative
+    // percentage-hash input.
+    let mut by_type: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
     for target in &rollout.targets {
-        let spec = context_hash_specs
-            .entry(target.context_type.clone())
-            .or_default();
+        let params = by_type.entry(target.context_type.clone()).or_default();
         if target.field == "Parameter" && !target.param.is_empty() {
-            spec.parameter_names.push(target.param.clone());
+            params.push(target.param.clone());
         }
-        // field == "Key" → parameter_names stays empty → hash on context key
+        // field == "Key" → params stays empty → hash on the context key
+    }
+    let mut hash_inputs: Vec<HashSelector> = Vec::new();
+    for (ctx_type, mut params) in by_type {
+        if params.is_empty() {
+            hash_inputs.push(HashSelector {
+                selector: Some(HashSel::ContextKey(ContextKeySelector {
+                    context_type: ctx_type,
+                })),
+            });
+        } else {
+            params.sort();
+            for param in params {
+                hash_inputs.push(HashSelector {
+                    selector: Some(HashSel::ContextParameter(ContextParameterSelector {
+                        context_type: ctx_type.clone(),
+                        parameter: param,
+                    })),
+                });
+            }
+        }
     }
     let buckets = rollout
         .weights
@@ -363,11 +386,8 @@ fn build_percentage_allocation(rollout: &FixturePercentageRollout) -> Percentage
         })
         .collect();
     PercentageAllocation {
-        context_hash_specs,
         buckets,
-        // Phase 3 of flag_eval_unify_20260522 added `hash_inputs` alongside
-        // the legacy map. Conformance fixture still drives via the map.
-        hash_inputs: Vec::new(),
+        hash_inputs,
         exclusion_gate: None,
         realtime_bandit: None,
     }
