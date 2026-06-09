@@ -44,16 +44,16 @@ dev containers; parallelism savings are small and conflict risk is real.
 
 ## Phase 3: Proto/API Backward-Compat Removal + Tag Compaction
 
-- [ ] Task 3.1: Inventory compat-only / retired / duplicated proto fields, dead enum values, and
+- [x] Task 3.1: [f95b809] Inventory compat-only / retired / duplicated proto fields, dead enum values, and
       any `*_v2` message names across all `.proto` files (enabled_override optional, additive
       sequential/bandit/pre_period_days fields, MutationKind values, etc.).
-- [ ] Task 3.2: Remove compat-only fields and **compact tag numbers** to final contiguous order
+- [x] Task 3.2: [f95b809] Remove compat-only fields and **compact tag numbers** to final contiguous order
       (no `reserved` gaps); regenerate tonic/prost stubs.
-- [ ] Task 3.3: Update every consumer to the final contract (gateway routes, each service's
+- [x] Task 3.3: [f95b809] Update every consumer to the final contract (gateway routes, each service's
       mapping.rs/service.rs, the Rust SDK); restore compile + behaviour parity.
-- [ ] Task 3.4: Update proto contract tests (`stitchd-proto/src/tests.rs`) and the gateway
+- [x] Task 3.4: [f95b809] Update proto contract tests (`stitchd-proto/src/tests.rs`) and the gateway
       OpenAPI contract check to the final surface.
-- [ ] Task: Conductor - User Manual Verification 'Proto/API Backward-Compat Removal + Tag Compaction' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Proto/API Backward-Compat Removal + Tag Compaction' [autonomous] (Protocol in workflow.md)
 
 ## Phase 4: Dead Legacy Code-Path Removal
 

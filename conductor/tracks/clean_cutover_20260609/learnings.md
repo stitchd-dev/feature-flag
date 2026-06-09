@@ -69,3 +69,25 @@ discipline, etc.). Especially relevant to this clean-cutover track:
   - Context: stats-service self-seeding live-CH tests call event_writer::migrations::run,
     so they validate the new baseline end-to-end without manual seeding.
 ---
+
+## [2026-06-09] - Phase 3: Proto/API Backward-Compat Removal + Tag Compaction (Tasks 3.1-3.4)
+- **Implemented:** Removed compat-only proto fields + compacted tags; updated all consumers + contract tests. Commit f95b809
+- **Files changed:** proto/{flags/flag_sync,analytics/analytics,segments/segmentation_service}.proto; stitchd-proto/src/tests.rs; flag-service mapping.rs+service.rs; experimentation service.rs; gateway routes/flags.rs; segmentation grpc/service.rs; sdks/rust/{src/client.rs, tests/conformance.rs, parity_with_preview.rs, exclusion_gating.rs, e2e_cross_context_hashing.rs}
+- **Learnings:**
+  - Pattern: prost generates struct fields by NAME, so compacting proto TAG numbers
+    does NOT break Rust consumers (only wire compat, which is irrelevant when nothing
+    is live). Only FIELD REMOVALS require consumer edits. No checked-in generated .rs
+    (tonic build.rs generates into OUT_DIR) so editing .proto + rebuild regenerates.
+  - Gotcha: the Rust SDK lives in sdks/rust/, NOT crates/ — crates/-scoped greps MISS
+    SDK consumers. Always whole-tree grep (excl target/.git) for proto-field consumers.
+  - Gotcha: a field name can appear in TWO messages (segments user_list/excluded_keys:
+    active request side + deprecated AdminSegment response side). Remove only the
+    deprecated copy; verify the active one is untouched.
+  - Gotcha: SDK conformance fixtures drove percentage hashing through the legacy
+    context_hash_specs map (canonical sort: context_type ASC, param ASC). Removing the
+    fallback requires rebuilding hash_inputs in that SAME canonical order (BTreeMap +
+    sorted params) to keep fixture hashes byte-identical — else conformance fails.
+  - Context: removed shims: flags context_hash_specs+ContextHashSpec; analytics
+    TrackEvent/EventFiring reserved tags; segments AdminSegment user_list/excluded_keys.
+    Kept legitimate "empty→user/fixed" defaults (not removable compat).
+---
