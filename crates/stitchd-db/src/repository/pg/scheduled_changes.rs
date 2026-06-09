@@ -685,8 +685,12 @@ mod tests {
 
     #[sqlx::test(migrations = "./migrations")]
     async fn create_one_shot_defaults_pending(pool: PgPool) {
+        use chrono::SubsecRound;
         let repo = ScheduledChangeRepository::new(pool);
-        let at = Utc::now();
+        // Truncate to microseconds: PostgreSQL `timestamptz` has microsecond
+        // resolution, so a nanosecond-precision `Utc::now()` would not round-trip
+        // exactly — the equality assertion below was flaky without this.
+        let at = Utc::now().trunc_subsecs(6);
         let row = repo.create(&one_shot_input(at)).await.unwrap();
         assert_eq!(row.status, ScheduleStatus::Pending);
         assert_eq!(row.schedule_kind, "one_shot");
