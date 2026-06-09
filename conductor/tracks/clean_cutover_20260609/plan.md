@@ -57,12 +57,12 @@ dev containers; parallelism savings are small and conflict risk is real.
 
 ## Phase 4: Dead Legacy Code-Path Removal
 
-- [ ] Task 4.1: Remove migration-path / old-contract Rust branches and comments (e.g. the
+- [x] Task 4.1: [9c60185] Remove migration-path / old-contract Rust branches and comments (e.g. the
       "legacy callers that don't supply context_type" branch in experiment_results.rs, dual-table
       query branches, retired-field mappings).
-- [ ] Task 4.2: Grep-sweep residual `legacy|backward|compat|_v2|deprecated` references; remove or
+- [x] Task 4.2: [9c60185] Grep-sweep residual `legacy|backward|compat|_v2|deprecated` references; remove or
       rewrite each; confirm no dead compat code remains.
-- [ ] Task: Conductor - User Manual Verification 'Dead Legacy Code-Path Removal' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Dead Legacy Code-Path Removal' [autonomous] (Protocol in workflow.md)
 
 ## Phase 5: Derived Artifacts, Docs, and Full-Stack Verification
 

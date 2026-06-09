@@ -91,3 +91,17 @@ discipline, etc.). Especially relevant to this clean-cutover track:
     TrackEvent/EventFiring reserved tags; segments AdminSegment user_list/excluded_keys.
     Kept legitimate "empty→user/fixed" defaults (not removable compat).
 ---
+
+## [2026-06-09] - Phase 4: Dead Legacy Code-Path Removal (Tasks 4.1-4.2)
+- **Implemented:** Deleted dead crates/stitchd-db/clickhouse-migrations/ dir; removed legacy MfaChallengeRepository trait+impl+test; rewrote stale comments. Commit 9c60185
+- **Files changed:** deleted clickhouse-migrations/ (6 files); stitchd-db src/auth/mfa.rs+mod.rs+lib.rs, README.md; analytics experiment_results.rs; sdk e2e test; .sqlx (1 pruned)
+- **Learnings:**
+  - Gotcha: most "legacy" grep hits in stitchd-core stats (interaction/loglinear/bayesian)
+    are NOT compat shims — they are regression-gate references to the original pairwise
+    "legacy" fn that the N-way generalization must match byte-for-byte. Do NOT remove.
+  - Pattern: removing a sqlx::query! macro prunes its .sqlx/query-*.json cache entry —
+    commit the deletion (cargo sqlx prepare regenerates; CI sqlx-check verifies).
+  - Context: crates/stitchd-db/clickhouse-migrations/ was the pre-cutover CH migration
+    location; superseded by stitchd-event-writer/migrations/ (embedded migrator). It was
+    dead since schema_cutover_20260525 but never deleted.
+---
