@@ -7,9 +7,11 @@ import { ErrorBanner } from '../../components/ErrorBanner'
 import { EmptyState } from '../../components/EmptyState'
 import { usePaginatedList } from '../../hooks/usePaginatedList'
 import { useOrgContext } from '../../context/OrgContext'
+import { usePermissions } from '../../hooks/usePermissions'
 import { api, listExperimentExposures } from '../../lib/api'
 import type { ExperimentResponse } from '../../lib/types'
 import { CreateExperimentModal } from './CreateExperimentModal'
+import { BanditCampaignsPanel } from './BanditCampaignsPanel'
 import {
   buildMetricNameLookup,
   computeDaysRemaining,
@@ -37,6 +39,8 @@ interface FlagsListResponse {
 export function ExperimentsList() {
   const navigate = useNavigate()
   const { envId, orgId, projectId } = useOrgContext()
+  const { roles } = usePermissions()
+  const canManageCampaigns = roles.includes('org_admin')
   const [searchParams, setSearchParams] = useSearchParams()
   const [search, setSearch] = useState('')
   const [showCreate, setShowCreate] = useState(false)
@@ -398,6 +402,8 @@ export function ExperimentsList() {
             )}
           </>
         )}
+
+        <BanditCampaignsPanel envId={envId} flags={flagOptions} canManage={canManageCampaigns} />
       </div>
 
       {showCreate && <CreateExperimentModal onClose={() => setShowCreate(false)} />}
