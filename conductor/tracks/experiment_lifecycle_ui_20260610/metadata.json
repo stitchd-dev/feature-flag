@@ -11,5 +11,12 @@
   "git_branch": "track/experiment_lifecycle_ui_20260610",
   "worktree_path": ".worktrees/experiment_lifecycle_ui_20260610",
   "beads_wisp": "feature-flag-wisp-99m",
-  "beads_area_issue": "feature-flag-dx6"
+  "beads_area_issue": "feature-flag-dx6",
+  "beads_epic": "feature-flag-6qh",
+  "beads_tasks": {
+    "phase1": "feature-flag-6qh.1",
+    "phase2": "feature-flag-6qh.2",
+    "phase3": "feature-flag-6qh.3",
+    "phase4": "feature-flag-6qh.4"
+  }
 }
