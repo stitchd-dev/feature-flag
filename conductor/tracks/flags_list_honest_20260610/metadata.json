@@ -1,0 +1,15 @@
+{
+  "track_id": "flags_list_honest_20260610",
+  "type": "chore",
+  "status": "new",
+  "priority": "medium",
+  "depends_on": [],
+  "estimated_hours": null,
+  "created_at": "2026-06-10T17:29:25Z",
+  "updated_at": "2026-06-10T17:29:25Z",
+  "description": "Honest flags list: remove the fabricated 30d-evals/Segments/Owner placeholder columns from the flags table (PreviewMetric + hashing UI already exist).",
+  "git_branch": "track/flags_list_honest_20260610",
+  "worktree_path": ".worktrees/flags_list_honest_20260610",
+  "beads_wisp": "feature-flag-wisp-99m",
+  "beads_area_issue": "feature-flag-u42"
+}
