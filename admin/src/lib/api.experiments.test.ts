@@ -61,6 +61,7 @@ const {
   triggerExperimentRecompute,
   getRecomputeStatus,
   setDefaultRuleDistribution,
+  transitionExperiment,
 } = await import('./api')
 
 // ─── Test helpers ────────────────────────────────────────────────────────────
@@ -398,5 +399,26 @@ describe('listExperimentIterations', () => {
     await expect(
       listExperimentIterations('env-1', 'exp-1'),
     ).rejects.toMatchObject({ response: { status: 502 } })
+  })
+})
+
+describe('transitionExperiment', () => {
+  it('POSTs { new_status, reason } to the transitions URL and returns the experiment', async () => {
+    spyClient.post.mockResolvedValueOnce({ data: { id: 'exp-1', key: 'exp-1', status: 'running' } })
+    const out = await transitionExperiment('env-1', 'exp-1', 'active', 'kickoff')
+    expect(spyClient.post.mock.calls[0][0]).toBe('/v1/environments/env-1/experiments/exp-1/transitions')
+    expect(spyClient.post.mock.calls[0][1]).toEqual({ new_status: 'active', reason: 'kickoff' })
+    expect(out.status).toBe('running')
+  })
+
+  it('omits reason when not provided', async () => {
+    spyClient.post.mockResolvedValueOnce({ data: { id: 'exp-1', key: 'exp-1', status: 'paused' } })
+    await transitionExperiment('env-1', 'exp-1', 'paused')
+    expect(spyClient.post.mock.calls[0][1]).toEqual({ new_status: 'paused' })
+  })
+
+  it('propagates gateway errors', async () => {
+    spyClient.post.mockRejectedValueOnce({ response: { status: 409, data: { message: 'invalid transition' } } })
+    await expect(transitionExperiment('env-1', 'exp-1', 'concluded')).rejects.toMatchObject({ response: { status: 409 } })
   })
 })
