@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useTweaks } from '../../hooks/useTweaks'
 import { usePermissions } from '../../hooks/usePermissions'
 import { usePaginatedList } from '../../hooks/usePaginatedList'
-import { PageHeader, VariantBar, Sparkline } from '../../components/primitives'
+import { PageHeader, VariantBar } from '../../components/primitives'
 import { I } from '../../components/icons'
 import { Pagination } from '../../components/Pagination'
 import { LoadingSpinner } from '../../components/LoadingSpinner'
@@ -41,14 +41,6 @@ function FlagTableRow({ flag, orgId, onToggle, isPrerequisiteOf }: { flag: Admin
       </td>
       <td><span className={`type-pill ${flag.flag_type}`}>{flag.flag_type}</span></td>
       <td style={{ minWidth: 180 }}><VariantBar variants={[{ name: flag.enabled ? 'on' : 'off', alloc: 100 }]} /></td>
-      <td>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Sparkline data={[]} height={20} />
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--fg-muted)' }}>—</span>
-        </div>
-      </td>
-      <td><span style={{ color: 'var(--fg-faint)' }}>—</span></td>
-      <td><span style={{ color: 'var(--fg-muted)' }}>—</span></td>
       <td style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>
         {flag.updated_at ? new Date(flag.updated_at).toLocaleDateString() : '—'}
       </td>
@@ -300,9 +292,6 @@ export function FlagsList() {
                         <th>Key</th>
                         <th>Type</th>
                         <th>Status</th>
-                        <th>30d evals</th>
-                        <th>Segments</th>
-                        <th>Owner</th>
                         <th>Updated</th>
                         <th></th>
                       </tr>
