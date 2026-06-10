@@ -4,6 +4,9 @@ import { useTweaks } from '../../hooks/useTweaks'
 import { PageHeader } from '../../components/primitives'
 import { I } from '../../components/icons'
 import { useOrgContext } from '../../context/OrgContext'
+import { usePermissions } from '../../hooks/usePermissions'
+import { LifecycleActions } from './LifecycleActions'
+import { lifecycleTimeline } from './lifecycleHelpers'
 import {
   ContextTypeProvider,
   useActiveContextType,
@@ -34,7 +37,6 @@ import {
   listContextTypes,
   pickContextTypeResult,
 } from './ExperimentDetail.helpers'
-import type { ExperimentDisplay } from './ExperimentDetail.helpers'
 import { Results } from './tabs/Results'
 import type { ResultsView, GoalDirection } from './tabs/Results'
 import { ExposuresPanel } from './tabs/Exposures'
@@ -92,38 +94,32 @@ type Tab =
 
 // ─── Config tab ──────────────────────────────────────────────────────────────
 
-function ExpConfig({ display, metricNames }: { display: ExperimentDisplay; metricNames: string[] }) {
-  // Phase 7 cutover: display the resolved metric names (from
-  // `metric_definitions.name`) instead of the legacy free-form `primary_metric`
-  // event key. Falls back to the raw metric_id when name resolution hasn't
-  // landed yet.
-  const primaryLabel = metricNames[0] ?? display.primary
+function fmtDate(iso: string | null): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString()
+}
+
+function ExpConfig({ exp, metricNames }: { exp: ExperimentSummary; metricNames: string[] }) {
+  // All rows are sourced from the real ExperimentSummary — no fabricated
+  // allocation / targeting / MDE / CUPED values (those have no backend source).
+  const primaryLabel = metricNames[0] ?? exp.metric_ids[0] ?? '—'
   const secondary = metricNames.slice(1)
+  const dash = (v: React.ReactNode) => <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{v}</span>
   const rows: [string, React.ReactNode][] = [
-    ['Bound flag', <span className="mono-key">{display.flag}</span>],
-    ['Statistical model', <span className="badge">{display.model}</span>],
-    ['Primary metric', <span style={{ fontWeight: 600 }}>{primaryLabel}</span>],
-    [
-      'Secondary metrics',
-      secondary.length > 0
-        ? <span style={{ fontSize: 12 }}>{secondary.join(' · ')}</span>
-        : <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>—</span>,
-    ],
-    ['Allocation', <span style={{ fontFamily: 'var(--font-mono)' }}>50 / 50</span>],
-    ['Targeting', <span style={{ fontSize: 12 }}>segment <span className="mono-key">beta-customers</span> AND country in [US, CA]</span>],
-    ['Duration', <span>14 days (started {display.started})</span>],
-    ['Min sample size', <span style={{ fontFamily: 'var(--font-mono)' }}>380,000</span>],
-    ['MDE', <span style={{ fontFamily: 'var(--font-mono)' }}>2.0%</span>],
-    ['α / β', <span style={{ fontFamily: 'var(--font-mono)' }}>0.05 / 0.20</span>],
-    ['CUPED', <span className="badge success">enabled · variance reduction 18%</span>],
+    ['Bound flag', <span className="mono-key">{exp.flag_key}</span>],
+    ['Status', <span className={`badge ${exp.status === 'running' ? 'info' : 'success'}`}>{exp.status}</span>],
+    ['Statistical model', <span className="badge">{exp.model}</span>],
+    ['Primary metric', exp.metric_ids.length > 0 ? <span style={{ fontWeight: 600 }}>{primaryLabel}</span> : dash('none attached')],
+    ['Secondary metrics', secondary.length > 0 ? <span style={{ fontSize: 12 }}>{secondary.join(' · ')}</span> : dash('—')],
+    ['Variants', <span style={{ fontFamily: 'var(--font-mono)' }}>{exp.variant_keys.length > 0 ? exp.variant_keys.join(', ') : exp.variants}</span>],
+    ['Randomisation unit', exp.unit_context_types.length > 0 ? <span style={{ fontSize: 12 }}>{exp.unit_context_types.join(' · ')}</span> : dash('—')],
+    ['Exclusion group', exp.exclusion_group_id ? <span className="mono-key">{exp.exclusion_group_id}</span> : dash('none')],
+    ['Created', <span style={{ fontSize: 12 }}>{fmtDate(exp.created_at)}</span>],
+    ['Started', exp.started_at ? <span style={{ fontSize: 12 }}>{fmtDate(exp.started_at)}</span> : dash('not started')],
+    ['Ended', exp.ended_at ? <span style={{ fontSize: 12 }}>{fmtDate(exp.ended_at)}</span> : dash('—')],
   ]
-  const lifecycle = [
-    ['Drafted', 'Marco G.', 'Apr 19'],
-    ['Review approved', 'Priya R.', 'Apr 19'],
-    ['Started', 'system', 'Apr 19, 09:14'],
-    ['Stats run', 'scheduler', 'every 60m'],
-    ['Ready to ship', 'reached 95%', 'Apr 25'],
-  ]
+  const timeline = lifecycleTimeline(exp)
   return (
     <div className="split-2-third">
       <div className="card">
@@ -140,12 +136,14 @@ function ExpConfig({ display, metricNames }: { display: ExperimentDisplay; metri
       <div className="card">
         <div className="card-header"><div className="card-title">Lifecycle</div></div>
         <div className="card-body">
-          {lifecycle.map((e, i) => (
-            <div key={i} style={{ display: 'flex', gap: 10, padding: '8px 0', borderBottom: i < lifecycle.length - 1 ? '1px solid var(--border-faint)' : 'none' }}>
-              <div style={{ width: 8, height: 8, borderRadius: '50%', background: i === lifecycle.length - 1 ? 'var(--accent)' : 'var(--success)', marginTop: 4, flexShrink: 0 }} />
+          {timeline.length === 0 ? (
+            <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>No lifecycle events yet.</div>
+          ) : timeline.map((stage, i) => (
+            <div key={stage.label} style={{ display: 'flex', gap: 10, padding: '8px 0', borderBottom: i < timeline.length - 1 ? '1px solid var(--border-faint)' : 'none' }}>
+              <div style={{ width: 8, height: 8, borderRadius: '50%', background: i === timeline.length - 1 ? 'var(--accent)' : 'var(--success)', marginTop: 4, flexShrink: 0 }} />
               <div style={{ flex: 1, fontSize: 12 }}>
-                <div style={{ fontWeight: 600 }}>{e[0]}</div>
-                <div style={{ color: 'var(--fg-muted)' }}>{e[1]} · {e[2]}</div>
+                <div style={{ fontWeight: 600 }}>{stage.label}</div>
+                <div style={{ color: 'var(--fg-muted)' }}>{fmtDate(stage.at)}</div>
               </div>
             </div>
           ))}
@@ -260,6 +258,7 @@ export function ExperimentDetail() {
         apiResults={apiResults}
         metricNames={metricNames}
         primaryGoalDirection={primaryGoalDirection}
+        onExperimentUpdated={setApiExp}
       />
     </ContextTypeProvider>
   )
@@ -270,6 +269,7 @@ interface BodyProps {
   apiResults: ExperimentResults | null
   metricNames: string[]
   primaryGoalDirection: GoalDirection
+  onExperimentUpdated: (exp: ExperimentSummary) => void
 }
 
 function ExperimentDetailBody({
@@ -277,10 +277,14 @@ function ExperimentDetailBody({
   apiResults,
   metricNames,
   primaryGoalDirection,
+  onExperimentUpdated,
 }: BodyProps) {
   const navigate = useNavigate()
   const { tweaks } = useTweaks()
   const { orgId, envId, projectId } = useOrgContext()
+  const { roles } = usePermissions()
+  const canManage = roles.includes('org_admin')
+  const [transitionError, setTransitionError] = useState<string | null>(null)
   const { contextTypes, activeContextType, setActiveContextType } =
     useActiveContextType()
 
@@ -588,26 +592,32 @@ function ExperimentDetailBody({
         actions={
           <>
             {displayStatus === 'running' && (
-              <>
-                <button
-                  className="btn"
-                  onClick={startRecompute}
-                  disabled={
-                    recomputeStatus != null && shouldKeepPolling(recomputeStatus)
-                  }
-                >
-                  <I.refresh size={13} /> Recompute
-                </button>
-                <button className="btn danger"><I.pause size={13} /> Stop</button>
-              </>
+              <button
+                className="btn"
+                onClick={startRecompute}
+                disabled={
+                  recomputeStatus != null && shouldKeepPolling(recomputeStatus)
+                }
+              >
+                <I.refresh size={13} /> Recompute
+              </button>
             )}
-            {displayStatus === 'running' && display.confidence >= 95 && (
-              <button className="btn primary"><I.rocket size={13} /> Ship winner</button>
-            )}
+            <LifecycleActions
+              envId={envId ?? ''}
+              experiment={apiExp}
+              canManage={canManage && !!envId}
+              onUpdated={(exp) => { setTransitionError(null); onExperimentUpdated(exp) }}
+              onError={setTransitionError}
+            />
           </>
         }
       />
       <div className="page-body">
+        {transitionError && (
+          <div style={{ fontSize: 12, color: 'var(--danger)', marginBottom: 12, padding: '8px 12px', background: 'var(--danger-bg)', borderRadius: 6 }}>
+            {transitionError}
+          </div>
+        )}
         {showCtxSwitcher && (
           <div
             style={{
@@ -761,7 +771,7 @@ function ExperimentDetailBody({
 
         {tab === 'config' && (
           <>
-            <ExpConfig display={display} metricNames={metricNames} />
+            <ExpConfig exp={apiExp} metricNames={metricNames} />
             {projectId && (
               <div className="card" style={{ marginTop: 16 }}>
                 <div className="card-header">
@@ -785,20 +795,20 @@ function ExperimentDetailBody({
 
         {tab === 'metrics' && (
           <div className="card">
+            {/* Only columns with a real backing source are shown — primary vs
+                secondary is derived from metric order. Type/aggregation/threshold
+                live on the Metrics page; we don't render empty columns here. */}
             <table className="table">
-              <thead><tr><th>Metric</th><th>Type</th><th>Aggregation</th><th>Role</th><th>Threshold</th></tr></thead>
+              <thead><tr><th>Metric</th><th>Role</th></tr></thead>
               <tbody>
                 {(metricNames.length > 0 ? metricNames : apiExp.metric_ids).map((m, i) => (
                   <tr key={m}>
                     <td><span className="mono-key">{m}</span></td>
-                    <td><span className="type-pill bool">—</span></td>
-                    <td>—</td>
                     <td><span className={`badge ${i === 0 ? 'accent' : ''}`}>{i === 0 ? 'primary' : 'secondary'}</span></td>
-                    <td>—</td>
                   </tr>
                 ))}
                 {apiExp.metric_ids.length === 0 && (
-                  <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--fg-muted)', padding: 24 }}>No metrics attached</td></tr>
+                  <tr><td colSpan={2} style={{ textAlign: 'center', color: 'var(--fg-muted)', padding: 24 }}>No metrics attached</td></tr>
                 )}
               </tbody>
             </table>
@@ -809,8 +819,12 @@ function ExperimentDetailBody({
           <div className="card">
             <div className="empty">
               <div className="empty-icon"><I.event size={20} /></div>
-              <div className="empty-title">Event stream view</div>
-              <div className="empty-desc">Live tail of qualifying events from ClickHouse — useful for debugging metric definitions.</div>
+              <div className="empty-title">No per-experiment event stream</div>
+              <div className="empty-desc">
+                Event firings and definitions are managed on the <strong>Events</strong> page,
+                and metric configuration on the <strong>Metrics</strong> page. This experiment's
+                metrics are listed under the Metrics tab.
+              </div>
             </div>
           </div>
         )}

@@ -730,6 +730,29 @@ export async function getExperiment(
   return data
 }
 
+/** Status values accepted by the transitions endpoint. */
+export type ExperimentTransitionStatus = 'draft' | 'active' | 'paused' | 'concluded'
+
+/**
+ * Transition an experiment to a new status via
+ * `POST /v1/environments/{env}/experiments/{id}/transitions`. The gateway maps
+ * `active` → running. Returns the updated experiment.
+ */
+export async function transitionExperiment(
+  environmentId: string,
+  experimentId: string,
+  newStatus: ExperimentTransitionStatus,
+  reason?: string,
+): Promise<ExperimentSummary> {
+  const body: { new_status: string; reason?: string } = { new_status: newStatus }
+  if (reason && reason.trim()) body.reason = reason.trim()
+  const { data } = await api.post<ExperimentSummary>(
+    `/v1/environments/${environmentId}/experiments/${experimentId}/transitions`,
+    body,
+  )
+  return data
+}
+
 /**
  * Per-context-type experiment results envelope.
  *
