@@ -382,21 +382,71 @@ export async function removeOrgMember(orgId: string, userId: string): Promise<vo
 
 // ─── Auth Providers ───────────────────────────────────────────────────────────
 
-export interface AuthProviderSummary {
-  auth_provider_id: string
-  provider_type: string
-  display_name: string
-  is_enabled: boolean
-  created_at: string
+// Wire shapes match the gateway `auth_providers` routes
+// (crates/stitchd-gateway/src/routes/auth_providers.rs). The response uses
+// `id` + `enabled` (NOT `auth_provider_id`/`is_enabled`).
+
+export interface OidcConfigView {
+  issuer_url: string
+  client_id: string
 }
 
-export async function listAuthProviders(orgId: string, signal?: AbortSignal): Promise<AuthProviderSummary[]> {
-  const { data } = await api.get<AuthProviderSummary[]>(`/v1/orgs/${orgId}/auth-providers`, { signal })
+export interface SamlConfigView {
+  idp_metadata_url: string | null
+  name_id_format: string
+  sp_entity_id: string
+}
+
+export interface AuthProvider {
+  id: string
+  org_id: string
+  provider_type: 'oidc' | 'saml' | string
+  display_name: string
+  enabled: boolean
+  acs_url: string | null
+  oidc: OidcConfigView | null
+  saml: SamlConfigView | null
+  created_at: string
+  updated_at: string
+}
+
+export interface OidcConfigInput {
+  issuer_url: string
+  client_id: string
+  client_secret: string
+  scopes?: string[]
+}
+
+export interface SamlConfigInput {
+  idp_metadata_url?: string
+  idp_metadata_xml?: string
+  name_id_format?: string
+  sp_entity_id: string
+}
+
+export type CreateAuthProviderBody =
+  | { provider_type: 'oidc'; display_name: string; enabled?: boolean; config: OidcConfigInput }
+  | { provider_type: 'saml'; display_name: string; enabled?: boolean; config: SamlConfigInput }
+
+// The update config is itself tagged by `provider_type` (flattened alongside
+// the config fields) per the gateway `UpdateConfigBody` enum.
+export type UpdateAuthProviderConfig =
+  | ({ provider_type: 'oidc' } & OidcConfigInput)
+  | ({ provider_type: 'saml' } & SamlConfigInput)
+
+export interface UpdateAuthProviderBody {
+  display_name?: string
+  enabled?: boolean
+  config?: UpdateAuthProviderConfig
+}
+
+export async function listAuthProviders(orgId: string, signal?: AbortSignal): Promise<AuthProvider[]> {
+  const { data } = await api.get<AuthProvider[]>(`/v1/orgs/${orgId}/auth-providers`, { signal })
   return data
 }
 
-export async function getAuthProvider(orgId: string, authProviderId: string, signal?: AbortSignal): Promise<AuthProviderSummary> {
-  const { data } = await api.get<AuthProviderSummary>(
+export async function getAuthProvider(orgId: string, authProviderId: string, signal?: AbortSignal): Promise<AuthProvider> {
+  const { data } = await api.get<AuthProvider>(
     `/v1/orgs/${orgId}/auth-providers/${authProviderId}`,
     { signal },
   )
@@ -405,18 +455,18 @@ export async function getAuthProvider(orgId: string, authProviderId: string, sig
 
 export async function createAuthProvider(
   orgId: string,
-  body: { provider_type: string; display_name: string; config: Record<string, unknown> },
-): Promise<AuthProviderSummary> {
-  const { data } = await api.post<AuthProviderSummary>(`/v1/orgs/${orgId}/auth-providers`, body)
+  body: CreateAuthProviderBody,
+): Promise<AuthProvider> {
+  const { data } = await api.post<AuthProvider>(`/v1/orgs/${orgId}/auth-providers`, body)
   return data
 }
 
 export async function updateAuthProvider(
   orgId: string,
   authProviderId: string,
-  body: { display_name?: string; config?: Record<string, unknown>; is_enabled?: boolean },
-): Promise<AuthProviderSummary> {
-  const { data } = await api.put<AuthProviderSummary>(
+  body: UpdateAuthProviderBody,
+): Promise<AuthProvider> {
+  const { data } = await api.put<AuthProvider>(
     `/v1/orgs/${orgId}/auth-providers/${authProviderId}`,
     body,
   )
@@ -428,10 +478,11 @@ export async function deleteAuthProvider(orgId: string, authProviderId: string):
 }
 
 export async function getSamlSpMetadata(orgId: string, authProviderId: string): Promise<string> {
-  const { data } = await api.get<string>(
+  // The endpoint returns `{ "xml": "<EntityDescriptor …>" }`, not a bare string.
+  const { data } = await api.get<{ xml: string }>(
     `/v1/orgs/${orgId}/auth-providers/${authProviderId}/saml/metadata`,
   )
-  return data
+  return data.xml
 }
 
 // ─── Flags ────────────────────────────────────────────────────────────────────

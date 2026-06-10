@@ -36,3 +36,26 @@ ManagementService RPCs (proto/management/v1) for users are ONLY:
 
 Follow-up candidates (NOT built this track): role-change RPC, email-invite flow,
 custom role definitions, MFA status. File in beads if product wants them.
+
+## Phase 4 deviation — stale auth-provider client (backend ahead of UI)
+
+The pre-existing (unused) `AuthProviderSummary` client type declared
+`auth_provider_id` + `is_enabled`, but the gateway `AuthProviderJson`
+(crates/stitchd-gateway/src/routes/auth_providers.rs) actually returns `id` +
+`enabled` (+ `oidc`/`saml`/`acs_url`). `getSamlSpMetadata` also returned the raw
+`{ xml }` object typed as `string` instead of unwrapping `.xml`. These bugs are
+why the methods were never wired. Fixed in api.ts: correct `AuthProvider` type,
+discriminated create/update bodies (`provider_type`-tagged, matching the gateway
+`CreateProviderBody`/`UpdateConfigBody` enums), and `.xml` unwrap. Pinned by
+api.authproviders.test.ts (5 tests). No backend change required.
+
+## Verification note
+
+Live end-to-end verification of the data path needs the full backend stack
+(Postgres + ClickHouse + Scylla + gateway + auth/management services) running
+and a seeded org — not up in this environment. Validated instead by: `tsc -b`
+clean, `npm run lint` (0 errors; 2 set-state-in-effect warnings matching the
+established Environments.tsx pattern), full vitest (1028 tests, 34 new), and a
+clean `npm run build`. Manual E2E: bring up the stack, log in, open
+`/org/:orgId/members`, exercise add/remove member and SSO create/edit/delete +
+SAML metadata download.

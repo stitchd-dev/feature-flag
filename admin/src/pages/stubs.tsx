@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { PageHeader } from '../components/primitives'
 import { I } from '../components/icons'
-import { EVENTS, MEMBERS, AUDIT } from '../lib/mockData'
+import { EVENTS, AUDIT } from '../lib/mockData'
 
 // ─── Events Registry ─────────────────────────────────────────────────────────
 
@@ -45,103 +45,6 @@ export function EventsRegistry() {
             </tbody>
           </table>
         </div>
-      </div>
-    </>
-  )
-}
-
-// ─── Members & Roles ─────────────────────────────────────────────────────────
-
-export function Members() {
-  const [tab, setTab] = useState<'members' | 'roles' | 'pending' | 'sso'>('members')
-
-  return (
-    <>
-      <PageHeader
-        crumbs={['Acme Cloud', 'Members']}
-        title="Members & Roles"
-        subtitle="Three-tier hierarchy: Organization → Project → Environment. Wildcard permissions resolve most-specific match wins."
-        actions={
-          <>
-            <button className="btn"><I.upload size={13} /> Bulk invite</button>
-            <button className="btn primary"><I.plus size={14} /> Invite member</button>
-          </>
-        }
-      />
-      <div className="page-body">
-        <div className="tabs">
-          <button className={`tab ${tab === 'members' ? 'active' : ''}`} onClick={() => setTab('members')}>Members <span className="count">{MEMBERS.length}</span></button>
-          <button className={`tab ${tab === 'roles' ? 'active' : ''}`} onClick={() => setTab('roles')}>Roles <span className="count">4</span></button>
-          <button className={`tab ${tab === 'pending' ? 'active' : ''}`} onClick={() => setTab('pending')}>Pending invites <span className="count">2</span></button>
-          <button className={`tab ${tab === 'sso' ? 'active' : ''}`} onClick={() => setTab('sso')}>SSO providers</button>
-        </div>
-
-        {tab === 'members' && (
-          <>
-            <div className="card">
-              <table className="table">
-                <thead>
-                  <tr><th>Member</th><th>Role</th><th>Projects</th><th>MFA</th><th>Last active</th><th></th></tr>
-                </thead>
-                <tbody>
-                  {MEMBERS.map((m) => (
-                    <tr key={m.email}>
-                      <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                          <div className="user-avatar" style={{ background: `linear-gradient(135deg, ${m.color}, ${m.color}cc)` }}>{m.initials}</div>
-                          <div>
-                            <div style={{ fontWeight: 600 }}>{m.name}</div>
-                            <div style={{ fontSize: 11, color: 'var(--fg-muted)' }}>{m.email}</div>
-                          </div>
-                        </div>
-                      </td>
-                      <td><span className={`badge ${m.role === 'Owner' ? 'accent' : m.role === 'Admin' ? 'info' : ''}`}>{m.role}</span></td>
-                      <td>{m.projects}</td>
-                      <td>{m.mfa ? <span className="badge success"><I.check size={10} /> on</span> : <span className="badge warning">off</span>}</td>
-                      <td style={{ color: 'var(--fg-muted)' }}>{m.last}</td>
-                      <td><button className="icon-btn"><I.more size={14} /></button></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="card" style={{ marginTop: 18 }}>
-              <div className="card-header">
-                <div className="card-title">Custom role: <span className="mono-key">payments-write</span></div>
-                <button className="btn sm">Edit</button>
-              </div>
-              <div className="card-body">
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14, fontSize: 12 }}>
-                  <div>
-                    <div style={{ color: 'var(--fg-muted)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Resources</div>
-                    <div className="mono-key" style={{ display: 'block', marginBottom: 4 }}>flag:payments-*</div>
-                    <div className="mono-key" style={{ display: 'block' }}>segment:high-risk-*</div>
-                  </div>
-                  <div>
-                    <div style={{ color: 'var(--fg-muted)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Environments</div>
-                    <div className="mono-key" style={{ display: 'block', marginBottom: 4 }}>staging</div>
-                    <div className="mono-key" style={{ display: 'block' }}>qa</div>
-                  </div>
-                  <div>
-                    <div style={{ color: 'var(--fg-muted)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Actions</div>
-                    {['read', 'write', 'toggle'].map((a) => <span key={a} className="badge success" style={{ marginRight: 4, marginBottom: 4 }}><I.check size={10} />{a}</span>)}
-                    {['delete', 'admin'].map((a) => <span key={a} className="badge" style={{ marginRight: 4, marginBottom: 4, opacity: 0.5 }}>{a}</span>)}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </>
-        )}
-
-        {tab !== 'members' && (
-          <div className="card">
-            <div className="empty">
-              <div className="empty-icon"><I.users size={22} stroke="var(--fg-subtle)" /></div>
-              <div className="empty-title">Coming soon</div>
-              <div className="empty-desc">This tab will be implemented in a future release.</div>
-            </div>
-          </div>
-        )}
       </div>
     </>
   )
