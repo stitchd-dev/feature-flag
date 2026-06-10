@@ -11,5 +11,9 @@
   "git_branch": "track/flags_list_honest_20260610",
   "worktree_path": ".worktrees/flags_list_honest_20260610",
   "beads_wisp": "feature-flag-wisp-99m",
-  "beads_area_issue": "feature-flag-u42"
+  "beads_area_issue": "feature-flag-u42",
+  "beads_epic": "feature-flag-rjb",
+  "beads_tasks": {
+    "phase1": "feature-flag-rjb.1"
+  }
 }
