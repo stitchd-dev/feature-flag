@@ -11,5 +11,12 @@
   "git_branch": "track/bandit_campaign_ui_20260610",
   "worktree_path": ".worktrees/bandit_campaign_ui_20260610",
   "beads_wisp": "feature-flag-wisp-99m",
-  "beads_area_issue": "feature-flag-j38"
+  "beads_area_issue": "feature-flag-j38",
+  "beads_epic": "feature-flag-tfq",
+  "beads_tasks": {
+    "phase1": "feature-flag-tfq.1",
+    "phase2": "feature-flag-tfq.2",
+    "phase3": "feature-flag-tfq.3",
+    "phase4": "feature-flag-tfq.4"
+  }
 }
