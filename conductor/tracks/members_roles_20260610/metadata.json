@@ -1,0 +1,15 @@
+{
+  "track_id": "members_roles_20260610",
+  "type": "feature",
+  "status": "new",
+  "priority": "high",
+  "depends_on": [],
+  "estimated_hours": null,
+  "created_at": "2026-06-10T16:56:12Z",
+  "updated_at": "2026-06-10T16:56:12Z",
+  "description": "Members & Roles page real data: wire admin UI Members page to management org-user endpoints (list/create/remove) and the existing auth-provider CRUD for the SSO tab; remove mock data and 'coming soon' placeholders.",
+  "git_branch": "track/members_roles_20260610",
+  "worktree_path": ".worktrees/members_roles_20260610",
+  "beads_wisp": "feature-flag-wisp-99m",
+  "beads_area_issue": "feature-flag-kui"
+}
