@@ -11,5 +11,13 @@
   "git_branch": "track/members_roles_20260610",
   "worktree_path": ".worktrees/members_roles_20260610",
   "beads_wisp": "feature-flag-wisp-99m",
-  "beads_area_issue": "feature-flag-kui"
+  "beads_area_issue": "feature-flag-kui",
+  "beads_epic": "feature-flag-63g",
+  "beads_tasks": {
+    "phase1": "feature-flag-63g.1",
+    "phase2": "feature-flag-63g.2",
+    "phase3": "feature-flag-63g.3",
+    "phase4": "feature-flag-63g.4",
+    "phase5": "feature-flag-63g.5"
+  }
 }
