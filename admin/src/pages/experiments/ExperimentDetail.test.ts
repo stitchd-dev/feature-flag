@@ -59,3 +59,26 @@ describe('ExperimentDetail (page module)', () => {
     expect(SOURCE).toMatch(/ContextTypeTabs/)
   })
 })
+
+describe('ExperimentDetail — lifecycle transitions (experiment_lifecycle_ui_20260610)', () => {
+  it('wires the real LifecycleActions control', () => {
+    expect(SOURCE).toMatch(/LifecycleActions/)
+  })
+
+  it('removed the dead Stop / Ship-winner header buttons', () => {
+    expect(SOURCE).not.toMatch(/Ship winner/)
+    expect(SOURCE).not.toMatch(/>\s*Stop\s*</)
+  })
+
+  it('derives the lifecycle timeline from real timestamps (no mock actors/dates)', () => {
+    expect(SOURCE).toMatch(/lifecycleTimeline/)
+    expect(SOURCE).not.toMatch(/Marco G\./)
+    expect(SOURCE).not.toMatch(/Priya R\./)
+  })
+
+  it('no longer fabricates allocation / MDE / CUPED config values', () => {
+    expect(SOURCE).not.toMatch(/380,000/)
+    expect(SOURCE).not.toMatch(/variance reduction 18%/)
+    expect(SOURCE).not.toMatch(/beta-customers AND country/)
+  })
+})

@@ -4,6 +4,9 @@ import { useTweaks } from '../../hooks/useTweaks'
 import { PageHeader } from '../../components/primitives'
 import { I } from '../../components/icons'
 import { useOrgContext } from '../../context/OrgContext'
+import { usePermissions } from '../../hooks/usePermissions'
+import { LifecycleActions } from './LifecycleActions'
+import { lifecycleTimeline } from './lifecycleHelpers'
 import {
   ContextTypeProvider,
   useActiveContextType,
@@ -260,6 +263,7 @@ export function ExperimentDetail() {
         apiResults={apiResults}
         metricNames={metricNames}
         primaryGoalDirection={primaryGoalDirection}
+        onExperimentUpdated={setApiExp}
       />
     </ContextTypeProvider>
   )
@@ -270,6 +274,7 @@ interface BodyProps {
   apiResults: ExperimentResults | null
   metricNames: string[]
   primaryGoalDirection: GoalDirection
+  onExperimentUpdated: (exp: ExperimentSummary) => void
 }
 
 function ExperimentDetailBody({
@@ -277,10 +282,14 @@ function ExperimentDetailBody({
   apiResults,
   metricNames,
   primaryGoalDirection,
+  onExperimentUpdated,
 }: BodyProps) {
   const navigate = useNavigate()
   const { tweaks } = useTweaks()
   const { orgId, envId, projectId } = useOrgContext()
+  const { roles } = usePermissions()
+  const canManage = roles.includes('org_admin')
+  const [transitionError, setTransitionError] = useState<string | null>(null)
   const { contextTypes, activeContextType, setActiveContextType } =
     useActiveContextType()
 
@@ -588,26 +597,32 @@ function ExperimentDetailBody({
         actions={
           <>
             {displayStatus === 'running' && (
-              <>
-                <button
-                  className="btn"
-                  onClick={startRecompute}
-                  disabled={
-                    recomputeStatus != null && shouldKeepPolling(recomputeStatus)
-                  }
-                >
-                  <I.refresh size={13} /> Recompute
-                </button>
-                <button className="btn danger"><I.pause size={13} /> Stop</button>
-              </>
+              <button
+                className="btn"
+                onClick={startRecompute}
+                disabled={
+                  recomputeStatus != null && shouldKeepPolling(recomputeStatus)
+                }
+              >
+                <I.refresh size={13} /> Recompute
+              </button>
             )}
-            {displayStatus === 'running' && display.confidence >= 95 && (
-              <button className="btn primary"><I.rocket size={13} /> Ship winner</button>
-            )}
+            <LifecycleActions
+              envId={envId ?? ''}
+              experiment={apiExp}
+              canManage={canManage && !!envId}
+              onUpdated={(exp) => { setTransitionError(null); onExperimentUpdated(exp) }}
+              onError={setTransitionError}
+            />
           </>
         }
       />
       <div className="page-body">
+        {transitionError && (
+          <div style={{ fontSize: 12, color: 'var(--danger)', marginBottom: 12, padding: '8px 12px', background: 'var(--danger-bg)', borderRadius: 6 }}>
+            {transitionError}
+          </div>
+        )}
         {showCtxSwitcher && (
           <div
             style={{
