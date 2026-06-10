@@ -112,3 +112,8 @@ This file tracks all major tracks for the project.
 ---
 
 <!-- ARCHIVED: flags_list_honest_20260610 (2026-06-10) — Honest flags list (Conductor Wisp Area 5). Area 5 was scoped as "UpdateFlagHashing has no UI / flags-list sparklines placeholder / PreviewMetric unused"; on inspection PreviewMetric was ALREADY wired (EditMetricModal → POST /v1/metrics/{id}/preview) and a hash-inputs UI ALREADY existed (HashInputSelectorList + hashInputSchema in the default-rule editor). The genuine remaining gap was the flags TABLE rendering three fabricated columns with no list-level backing: 30d evals (<Sparkline data={[]}/> + —), Segments (—), Owner (—). Removed all three (header + FlagTableRow) and the now-unused Sparkline import; card/grouped layouts already showed only real data. Real per-flag analytics remain on the detail Analytics tab (/eval-stats). UI-only, no backend change. 1 phase, TDD (source-contract test). Merged to main (local, not pushed). Gate GREEN: tsc -b clean, eslint 0 errors, vitest 1053/1053 (4 new), vite build. Beads epic feature-flag-rjb (+ area feature-flag-u42 closed). Follow-up filed feature-flag-b78: list-level 30d-eval summary needs a batch/summary eval-stats endpoint. See conductor/archive/flags_list_honest_20260610/ -->
+
+---
+
+## [ ] Track: Bandit campaign management — gateway create/stop + UI
+*Link: [./conductor/tracks/bandit_campaign_ui_20260610/](./conductor/tracks/bandit_campaign_ui_20260610/)*

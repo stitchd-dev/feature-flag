@@ -1,0 +1,15 @@
+{
+  "track_id": "bandit_campaign_ui_20260610",
+  "type": "feature",
+  "status": "new",
+  "priority": "high",
+  "depends_on": [],
+  "estimated_hours": null,
+  "created_at": "2026-06-10T17:35:46Z",
+  "updated_at": "2026-06-10T17:35:46Z",
+  "description": "Bandit campaign management: expose CreateBanditCampaign/StopBanditCampaign on the gateway (currently only GET list/get), add admin client methods, and build an env-scoped campaign management UI on the Experiments page.",
+  "git_branch": "track/bandit_campaign_ui_20260610",
+  "worktree_path": ".worktrees/bandit_campaign_ui_20260610",
+  "beads_wisp": "feature-flag-wisp-99m",
+  "beads_area_issue": "feature-flag-j38"
+}
