@@ -41,3 +41,7 @@ lcov.info
 .worktrees
 docs/src/api/openapi.json
 docs/src/grpc/*.md
+
+# Ephemeral Claude Code agent worktrees / local tooling config
+.claude/worktrees/
+admin/.claude/
