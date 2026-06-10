@@ -17,3 +17,45 @@ Patterns, gotchas, and context discovered during implementation.
 - Auth-provider CRUD already wrapped in `admin/src/lib/api.ts` (listAuthProviders, createAuthProvider, updateAuthProvider, deleteAuthProvider, getSamlSpMetadata) but unused by any page.
 
 <!-- Learnings from implementation will be appended below -->
+
+## Phase 1 findings (2026-06-10)
+
+ManagementService RPCs (proto/management/v1) for users are ONLY:
+`CreateUser`, `ListOrgUsers`, `RemoveOrgUser`. There is:
+- **No role-change RPC** (UpdateUser/ChangeRole absent). `org_role` is set at
+  creation only → role rendered **read-only**; no inline "change role" control.
+- **No pending-invite store / invite flow.** `CreateUser` directly provisions a
+  credentialed user (email + display_name + password + org_role). It is NOT an
+  email invite → the action is labelled **"Add member"**, not "Invite", to avoid
+  implying an email is sent. The "Pending invites" tab is **removed**.
+- **No custom-role-definition API.** RBAC is the fixed `org_admin`/`org_member`
+  enum (stitchd-db role.rs; OrgAdmin>OrgMember). The fake "custom role:
+  payments-write" card is **removed**. The "Roles" tab is replaced with an
+  honest static description of the two-role model (real info, not a placeholder).
+- **No bulk-invite endpoint** → the "Bulk invite" button is **removed**.
+
+Follow-up candidates (NOT built this track): role-change RPC, email-invite flow,
+custom role definitions, MFA status. File in beads if product wants them.
+
+## Phase 4 deviation — stale auth-provider client (backend ahead of UI)
+
+The pre-existing (unused) `AuthProviderSummary` client type declared
+`auth_provider_id` + `is_enabled`, but the gateway `AuthProviderJson`
+(crates/stitchd-gateway/src/routes/auth_providers.rs) actually returns `id` +
+`enabled` (+ `oidc`/`saml`/`acs_url`). `getSamlSpMetadata` also returned the raw
+`{ xml }` object typed as `string` instead of unwrapping `.xml`. These bugs are
+why the methods were never wired. Fixed in api.ts: correct `AuthProvider` type,
+discriminated create/update bodies (`provider_type`-tagged, matching the gateway
+`CreateProviderBody`/`UpdateConfigBody` enums), and `.xml` unwrap. Pinned by
+api.authproviders.test.ts (5 tests). No backend change required.
+
+## Verification note
+
+Live end-to-end verification of the data path needs the full backend stack
+(Postgres + ClickHouse + Scylla + gateway + auth/management services) running
+and a seeded org — not up in this environment. Validated instead by: `tsc -b`
+clean, `npm run lint` (0 errors; 2 set-state-in-effect warnings matching the
+established Environments.tsx pattern), full vitest (1028 tests, 34 new), and a
+clean `npm run build`. Manual E2E: bring up the stack, log in, open
+`/org/:orgId/members`, exercise add/remove member and SSO create/edit/delete +
+SAML metadata download.

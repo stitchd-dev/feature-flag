@@ -19,17 +19,6 @@ export interface Event {
   schema: string
 }
 
-export interface Member {
-  name: string
-  email: string
-  role: string
-  projects: number
-  mfa: boolean
-  last: string
-  initials: string
-  color: string
-}
-
 export interface AuditEntry {
   t: string
   actor: string
@@ -47,15 +36,6 @@ export const EVENTS: Event[] = [
   { key: 'csat_score', type: 'double', described: 'CSAT score from support', env: 'production', volume30d: '6.7K', lastSeen: '12s ago', schema: '{ ticket_id, score }' },
   { key: 'dau_minutes', type: 'double', described: 'Daily active minutes per user', env: 'production', volume30d: '12M', lastSeen: '1s ago', schema: '{ user_id, minutes }' },
   { key: 'cart_abandoned', type: 'double', described: 'Cart abandoned with value', env: 'production', volume30d: '240K', lastSeen: '4s ago', schema: '{ user_id, cart_value }' },
-]
-
-export const MEMBERS: Member[] = [
-  { name: 'Priya Reddy', email: 'priya@stitchd.dev', role: 'Owner', projects: 8, mfa: true, last: 'now', initials: 'PR', color: '#FF7A52' },
-  { name: 'Marco Greco', email: 'marco@stitchd.dev', role: 'Admin', projects: 6, mfa: true, last: '5m ago', initials: 'MG', color: '#5BAEF5' },
-  { name: 'Lin Tan', email: 'lin@stitchd.dev', role: 'Admin', projects: 4, mfa: true, last: '1h ago', initials: 'LT', color: '#3DD68C' },
-  { name: 'Devon Hayes', email: 'devon@stitchd.dev', role: 'Member', projects: 2, mfa: false, last: 'yesterday', initials: 'DH', color: '#A892FF' },
-  { name: 'Sara Okonkwo', email: 'sara@stitchd.dev', role: 'Member (custom: payments-write)', projects: 1, mfa: true, last: '2d ago', initials: 'SO', color: '#E6B14F' },
-  { name: 'Ahmed Khan', email: 'ahmed@stitchd.dev', role: 'Member (read-only)', projects: 3, mfa: true, last: '3d ago', initials: 'AK', color: '#F26B5E' },
 ]
 
 export const AUDIT: AuditEntry[] = [

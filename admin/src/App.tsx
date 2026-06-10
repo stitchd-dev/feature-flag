@@ -28,9 +28,8 @@ import { EventsList } from './pages/events/EventsList'
 import { EventDetail } from './pages/events/EventDetail'
 import { MetricsList } from './pages/metrics/MetricsList'
 import { OrgsList, OrgDetail, SeedUser } from './pages/superadmin'
-import {
-  Members, AuditLog,
-} from './pages/stubs'
+import { Members } from './pages/members/Members'
+import { AuditLog } from './pages/stubs'
 import { Environments } from './pages/environments/Environments'
 import { ContextExplorer } from './pages/environments/ContextExplorer'
 import { I } from './components/icons'
