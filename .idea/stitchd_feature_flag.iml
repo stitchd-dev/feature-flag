@@ -22,6 +22,16 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/stitchd-segmentation-service/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/stitchd-auth-service/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/crates/stitchd-stats-service/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/stitchd-analytics-service/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/stitchd-event-writer/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/stitchd-event-writer/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/stitchd-experimentation-service/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/stitchd-flag-service/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/stitchd-gateway/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/stitchd-stats-service/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/sdks/rust/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/sdks/rust/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/sdks/rust/tests" isTestSource="true" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />
