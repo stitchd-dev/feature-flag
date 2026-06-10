@@ -298,11 +298,15 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
         )
         .route(
             "/v1/environments/{environment_id}/bandit-campaigns",
-            get(experiments::list_bandit_campaigns),
+            get(experiments::list_bandit_campaigns).post(experiments::create_bandit_campaign),
         )
         .route(
             "/v1/environments/{environment_id}/bandit-campaigns/{campaign_id}",
             get(experiments::get_bandit_campaign),
+        )
+        .route(
+            "/v1/environments/{environment_id}/bandit-campaigns/{campaign_id}/stop",
+            post(experiments::stop_bandit_campaign),
         )
         // Exclusion groups — read
         .route(

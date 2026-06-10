@@ -165,3 +165,46 @@ export async function getBanditCampaign(
   )
   return data
 }
+
+/** How a campaign carries variants forward when spawning a new iteration. */
+export type VariantDiscoveryPolicy = 'winner_plus_new' | 'winner_only'
+
+/** `BanditCampaignConfig` (stitchd-core bandit/types.rs), JSON-carried. */
+export interface BanditCampaignConfigInput {
+  /** Hard cap on spawned iterations (>= 1). */
+  max_iterations: number
+  /** Drift detector threshold in (0, 1). */
+  drift_threshold: number
+  variant_discovery?: VariantDiscoveryPolicy
+  budget_cap?: { max_total_units?: number }
+}
+
+export interface CreateBanditCampaignBody {
+  flag_id: string
+  name: string
+  config: BanditCampaignConfigInput
+}
+
+/** Create an autonomous optimization campaign on a flag. */
+export async function createBanditCampaign(
+  environmentId: string,
+  body: CreateBanditCampaignBody,
+): Promise<BanditCampaign> {
+  const { data } = await api.post<BanditCampaign>(
+    `/v1/environments/${encodeURIComponent(environmentId)}/bandit-campaigns`,
+    body,
+  )
+  return data
+}
+
+/** Stop a running campaign before completion (→ cancelled). */
+export async function stopBanditCampaign(
+  environmentId: string,
+  campaignId: string,
+): Promise<BanditCampaign> {
+  const { data } = await api.post<BanditCampaign>(
+    `/v1/environments/${encodeURIComponent(environmentId)}/bandit-campaigns/${encodeURIComponent(campaignId)}/stop`,
+    {},
+  )
+  return data
+}

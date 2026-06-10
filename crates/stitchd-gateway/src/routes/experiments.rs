@@ -1360,6 +1360,94 @@ pub async fn get_bandit_campaign(
     Ok(Json(campaign_to_json(&resp.into_inner())))
 }
 
+/// Request body for creating a bandit optimization campaign. `config` is the
+/// `BanditCampaignConfig` object — forwarded to the service as a JSON string.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CreateBanditCampaignBody {
+    pub flag_id: String,
+    pub name: String,
+    /// `BanditCampaignConfig` — `{max_iterations, drift_threshold,
+    /// variant_discovery?, budget_cap?}`.
+    pub config: serde_json::Value,
+}
+
+/// `POST /v1/environments/{environment_id}/bandit-campaigns`
+///
+/// Create an autonomous optimization campaign on a flag. The campaign
+/// auto-spawns successive bandit iterations until it converges, drifts, or hits
+/// its `max_iterations` / budget ceiling.
+#[utoipa::path(
+    post,
+    path = "/v1/environments/{environment_id}/bandit-campaigns",
+    tag = "experiments",
+    params(
+        ("environment_id" = String, Path, description = "Environment ID"),
+    ),
+    request_body = CreateBanditCampaignBody,
+    responses(
+        (status = 200, description = "Created bandit campaign", body = BanditCampaignJson),
+        (status = 400, description = "Invalid config"),
+        (status = 401, description = "Unauthorized"),
+        (status = 502, description = "Experimentation service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
+pub async fn create_bandit_campaign(
+    State(state): State<Arc<GatewayState>>,
+    Path(environment_id): Path<String>,
+    Json(body): Json<CreateBanditCampaignBody>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let req = tonic::Request::new(
+        stitchd_proto::experiments::v1::CreateBanditCampaignRequest {
+            environment_id,
+            flag_id: body.flag_id,
+            name: body.name,
+            config: body.config.to_string(),
+        },
+    );
+    let mut client = state.experimentation_client.lock().await;
+    let resp = client
+        .create_bandit_campaign(req)
+        .await
+        .map_err(GatewayError::from)?;
+    Ok(Json(campaign_to_json(&resp.into_inner())))
+}
+
+/// `POST /v1/environments/{environment_id}/bandit-campaigns/{campaign_id}/stop`
+///
+/// Stop a running campaign before completion (no further iterations spawn).
+#[utoipa::path(
+    post,
+    path = "/v1/environments/{environment_id}/bandit-campaigns/{campaign_id}/stop",
+    tag = "experiments",
+    params(
+        ("environment_id" = String, Path, description = "Environment ID"),
+        ("campaign_id" = String, Path, description = "Campaign ID"),
+    ),
+    responses(
+        (status = 200, description = "Stopped bandit campaign", body = BanditCampaignJson),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Campaign not found"),
+        (status = 502, description = "Experimentation service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
+pub async fn stop_bandit_campaign(
+    State(state): State<Arc<GatewayState>>,
+    Path((environment_id, campaign_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let req = tonic::Request::new(stitchd_proto::experiments::v1::StopBanditCampaignRequest {
+        environment_id,
+        campaign_id,
+    });
+    let mut client = state.experimentation_client.lock().await;
+    let resp = client
+        .stop_bandit_campaign(req)
+        .await
+        .map_err(GatewayError::from)?;
+    Ok(Json(campaign_to_json(&resp.into_inner())))
+}
+
 #[cfg(test)]
 pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
     #[allow(unused_imports)]
@@ -1405,11 +1493,15 @@ pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
         )
         .route(
             "/v1/environments/{environment_id}/bandit-campaigns",
-            get(list_bandit_campaigns),
+            get(list_bandit_campaigns).post(create_bandit_campaign),
         )
         .route(
             "/v1/environments/{environment_id}/bandit-campaigns/{campaign_id}",
             get(get_bandit_campaign),
+        )
+        .route(
+            "/v1/environments/{environment_id}/bandit-campaigns/{campaign_id}/stop",
+            post(stop_bandit_campaign),
         )
         .with_state(state)
 }
@@ -2161,6 +2253,56 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/v1/environments/env-1/bandit-campaigns")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.status() == StatusCode::OK || resp.status() == StatusCode::BAD_GATEWAY,
+            "status: {}",
+            resp.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn create_bandit_campaign_accepts_body_returns_200_or_502() {
+        let state = make_stub_state();
+        let app = test_router(state);
+        let body = serde_json::json!({
+            "flag_id": "11111111-1111-1111-1111-111111111111",
+            "name": "Checkout optimisation",
+            "config": { "max_iterations": 5, "drift_threshold": 0.1, "variant_discovery": "winner_plus_new" }
+        });
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/environments/env-1/bandit-campaigns")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // 200 (stub upstream replies) or 502 (no upstream). A 400/422 here would
+        // mean the body failed to deserialise into CreateBanditCampaignBody.
+        assert!(
+            resp.status() == StatusCode::OK || resp.status() == StatusCode::BAD_GATEWAY,
+            "status: {}",
+            resp.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_bandit_campaign_returns_200_or_502() {
+        let state = make_stub_state();
+        let app = test_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/environments/env-1/bandit-campaigns/camp-1/stop")
                     .body(Body::empty())
                     .unwrap(),
             )

@@ -20,3 +20,21 @@
   campaigns only; terminal = completed|cancelled.
 
 <!-- impl notes below -->
+
+## Impl (2026-06-10)
+- Gateway: create_bandit_campaign (POST, config serde_json::Value → to_string()) +
+  stop_bandit_campaign (POST .../stop), registered in router.rs + openapi.rs
+  (paths + CreateBanditCampaignBody schema). Mirrors list/get. 3 stub unit tests +
+  openapi contract green; clippy -D warnings + fmt clean. (Pre-existing 3
+  idempotency::pg_store_* tests fail without DATABASE_URL — unrelated; pass in CI.)
+- Client: createBanditCampaign/stopBanditCampaign + BanditCampaignConfigInput.
+- UI: BanditCampaignsPanel (list + create modal + stop confirm, org_admin-gated)
+  mounted on ExperimentsList (reuses its flagOptions). banditCampaignHelpers
+  (config builder + Yup schema + status badge + terminal check). Lint +1 warning
+  (load-in-effect, matches Environments.tsx pattern).
+- Follow-ups (no RPC): pause/resume campaign, edit campaign config.
+
+## Verification note
+Gateway: cargo test -p stitchd-gateway (stub, no DB) + openapi contract green;
+clippy/fmt clean. Admin: tsc clean, lint 0 errors, vitest 1069 (16 new), build.
+Live E2E needs full stack + a flag to spawn iterations on.

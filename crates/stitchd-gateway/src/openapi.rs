@@ -93,6 +93,8 @@ use utoipa::{
         crate::routes::experiments::get_bandit_history,
         crate::routes::experiments::list_bandit_campaigns,
         crate::routes::experiments::get_bandit_campaign,
+        crate::routes::experiments::create_bandit_campaign,
+        crate::routes::experiments::stop_bandit_campaign,
         // Exclusion groups (JWT)
         crate::routes::exclusion_groups::list_exclusion_groups,
         crate::routes::exclusion_groups::create_exclusion_group,
@@ -225,6 +227,7 @@ use utoipa::{
             crate::routes::experiments::BanditHistoryQuery,
             crate::routes::experiments::BanditCampaignJson,
             crate::routes::experiments::BanditCampaignsJson,
+            crate::routes::experiments::CreateBanditCampaignBody,
             // Exclusion groups
             crate::routes::exclusion_groups::ExclusionGroupJson,
             crate::routes::exclusion_groups::CreateExclusionGroupBody,
