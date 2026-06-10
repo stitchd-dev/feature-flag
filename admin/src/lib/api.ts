@@ -322,6 +322,64 @@ export async function seedUser(
   return data
 }
 
+// ─── Org Members (management, org-scoped) ─────────────────────────────────────
+//
+// These wrap the NON-superadmin management routes used by the org-admin
+// Members page (`/org/:orgId/members`). They are distinct from the superadmin
+// `listOrgUsers`/`removeOrgUser`/`seedUser` helpers above, which require a
+// System org and target `/v1/superadmin/...`.
+
+export type OrgMemberRole = 'org_admin' | 'org_member'
+
+export interface OrgMemberSummary {
+  user_id: string
+  email: string
+  display_name: string
+  role: string
+  created_at: string
+}
+
+export interface CreateOrgMemberBody {
+  email: string
+  display_name: string
+  password: string
+  org_role: OrgMemberRole
+}
+
+export interface CreatedOrgMember {
+  user_id: string
+  email: string
+  display_name: string
+}
+
+export async function listOrgMembers(
+  orgId: string,
+  params?: { cursor?: string | null; limit?: number },
+  signal?: AbortSignal,
+): Promise<CursorPage<OrgMemberSummary>> {
+  const qs = new URLSearchParams()
+  if (params?.cursor != null) qs.set('cursor', params.cursor)
+  if (params?.limit != null) qs.set('limit', String(params.limit))
+  const suffix = qs.toString() ? `?${qs}` : ''
+  const { data } = await api.get<CursorPage<OrgMemberSummary>>(
+    `/v1/management/orgs/${orgId}/users${suffix}`,
+    { signal },
+  )
+  return data
+}
+
+export async function createOrgMember(
+  orgId: string,
+  body: CreateOrgMemberBody,
+): Promise<CreatedOrgMember> {
+  const { data } = await api.post<CreatedOrgMember>(`/v1/management/orgs/${orgId}/users`, body)
+  return data
+}
+
+export async function removeOrgMember(orgId: string, userId: string): Promise<void> {
+  await api.delete(`/v1/management/orgs/${orgId}/users/${userId}`)
+}
+
 // ─── Auth Providers ───────────────────────────────────────────────────────────
 
 export interface AuthProviderSummary {
