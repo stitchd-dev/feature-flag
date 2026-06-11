@@ -1,12 +1,17 @@
-//! Gateway-edge audit capture (audit_log_20260611).
+//! Gateway-edge audit capture (audit_log_20260611, layering fixed in
+//! audit_capture_fix_20260611).
 //!
 //! The gateway is the single choke point for every authenticated admin
 //! mutation and already holds an [`RbacContext`] (actor = `subject`, org =
 //! `tenant_id`) on each request. Rather than thread an actor id through every
-//! backend service, we record audit entries here — the same edge-state pattern
-//! as the idempotency middleware: a narrowly-scoped [`PgPool`], opt-in via
-//! `STITCHD_DATABASE_URL`, layered outside the router, and **fail-open** (an
-//! audit-write error never breaks the request).
+//! backend service, we record audit entries here, sourcing the narrowly-scoped
+//! [`PgPool`] from `GatewayState.audit_pool` (opt-in via `STITCHD_DATABASE_URL`)
+//! and failing open (an audit-write error never breaks the request).
+//!
+//! IMPORTANT: this middleware is layered INNER to `auth_middleware` on the
+//! authenticated route groups (see `build_router`), so the `RbacContext` that
+//! `auth_middleware` injects is visible here. Layering it outside the router
+//! (the original mistake) ran it before auth → no `RbacContext` → NULL org/actor.
 //!
 //! v1 is intentionally lossy-but-honest: `resource_type` + `action` are derived
 //! from the request path + method via an explicit map; `resource_ref` is the
