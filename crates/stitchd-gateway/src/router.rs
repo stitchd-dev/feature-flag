@@ -26,9 +26,9 @@ use crate::middleware::auth::{
 use crate::middleware::event_quota::{build_limiter_from_env, event_quota_middleware};
 use crate::middleware::sdk_auth::sdk_auth_middleware;
 use crate::routes::{
-    admin, auth, auth_providers, context_intel, dependencies, eval_stats, event_admin, events,
-    exclusion_groups, experiments, flags, management, metrics, oidc, saml, schedules, sdk_backend,
-    segments, stats,
+    admin, audit, auth, auth_providers, context_intel, dependencies, eval_stats, event_admin,
+    events, exclusion_groups, experiments, flags, management, metrics, oidc, saml, schedules,
+    sdk_backend, segments, stats,
 };
 use crate::state::GatewayState;
 
@@ -210,6 +210,8 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
     let resource_read = Router::new()
         // Auth context
         .route("/v1/auth/me/permissions", get(auth::get_my_permissions))
+        // Audit log — org-scoped read (audit_log_20260611)
+        .route("/v1/orgs/{org_id}/audit", get(audit::list_audit))
         // Flags — read
         .route(
             "/v1/projects/{project_id}/flags",
