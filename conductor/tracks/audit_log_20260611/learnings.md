@@ -34,3 +34,23 @@ untouched (test-only scaffolding; no prod churn). Migration (org_id) lives in
 stitchd-db/migrations (canonical). Local builds: DATABASE_URL set + SQLX_OFFLINE
 unset → query! validates live; run `cargo sqlx prepare --workspace` before commit
 so CI (SQLX_OFFLINE=true + prepare --check) passes.
+
+## Verification (Phase 5)
+- End-to-end middleware test (#[sqlx::test]): PUT a mapped flag route with an
+  injected RbacContext → an audit_log row lands with org/actor/resource_type
+  ('flag')/action ('flag.update')/resource_ref ('checkout'). Write is spawned →
+  poll-with-retry in the test.
+- Gate GREEN (DB up): full gateway cargo test (incl. idempotency pg_store tests
+  which need live PG), audit 12 unit + 2 read #[sqlx::test] + 1 middleware
+  #[sqlx::test], openapi contract; clippy -D warnings + fmt; `cargo sqlx prepare
+  --workspace --check` passes offline; admin tsc/lint(0 err)/vitest 1076/build;
+  cargo xtask docs idempotent (no tracked-doc changes).
+- Pool unified: created once in main (edge_pool), attached to GatewayState
+  (audit_pool, used by read handler) AND the audit+idempotency middleware. Added
+  audit_pool:None to from_channels/connect + the events.rs test literal.
+
+## Follow-ups (filed)
+- Field-level diffs (capture request/response body changes).
+- Capture created-resource id from POST response bodies (currently NULL on creates).
+- CSV export; per-entity audit timelines on detail pages.
+- Eventually move capture into services for richer diffs (needs actor propagation).

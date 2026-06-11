@@ -253,6 +253,79 @@ pub async fn audit_middleware(
 mod tests {
     use super::*;
 
+    #[sqlx::test(migrations = "../stitchd-db/migrations")]
+    async fn middleware_records_a_mapped_mutation_end_to_end(pool: sqlx::PgPool) {
+        use axum::{
+            Router, body::Body, http::Request, middleware::from_fn, middleware::from_fn_with_state,
+            routing::put,
+        };
+        use tower::ServiceExt;
+
+        let org = Uuid::new_v4();
+        let actor = Uuid::new_v4();
+        let writer = Arc::new(PgAuditWriter::new(pool.clone()));
+
+        // A minimal app: PUT a mapped flag route → 200, with the audit middleware
+        // and a preceding layer that injects an RbacContext (as the real auth
+        // middleware would).
+        let app = Router::new()
+            .route(
+                "/v1/projects/{pid}/flags/{key}",
+                put(|| async { StatusCode::OK }),
+            )
+            .layer(from_fn_with_state(writer, audit_middleware))
+            .layer(from_fn(
+                move |mut req: Request<Body>, next: Next| async move {
+                    req.extensions_mut().insert(RbacContext {
+                        tenant_id: org.to_string(),
+                        environment_id: String::new(),
+                        roles: vec![],
+                        permissions: vec![],
+                        subject: actor.to_string(),
+                        is_system: false,
+                    });
+                    next.run(req).await
+                },
+            ));
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/v1/projects/p1/flags/checkout")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // The write is fire-and-forget (spawned) — poll for the row.
+        let mut found: Option<(String, String, Option<String>, Option<Uuid>)> = None;
+        for _ in 0..40 {
+            let row: Option<(String, String, Option<String>, Option<Uuid>)> = sqlx::query_as(
+                "SELECT resource_type, action, resource_ref, actor_id FROM audit_log \
+                 WHERE org_id = $1",
+            )
+            .bind(org)
+            .fetch_optional(&pool)
+            .await
+            .unwrap();
+            if row.is_some() {
+                found = row;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+
+        let (resource_type, action, resource_ref, actor_id) =
+            found.expect("a mapped mutation must record an audit row");
+        assert_eq!(resource_type, "flag");
+        assert_eq!(action, "flag.update");
+        assert_eq!(resource_ref.as_deref(), Some("checkout"));
+        assert_eq!(actor_id, Some(actor));
+    }
+
     #[test]
     fn should_record_only_successful_mutations() {
         assert!(should_record(&Method::POST, StatusCode::OK));
