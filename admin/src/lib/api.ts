@@ -380,6 +380,38 @@ export async function removeOrgMember(orgId: string, userId: string): Promise<vo
   await api.delete(`/v1/management/orgs/${orgId}/users/${userId}`)
 }
 
+// ─── Audit Log (audit_log_20260611) ───────────────────────────────────────────
+//
+// Org-scoped audit entries captured by the gateway edge audit middleware.
+// Wire shape mirrors the gateway `audit` route (AuditEntryJson + CursorPage).
+
+export interface AuditEntry {
+  id: string
+  actor_id: string | null
+  actor_email: string | null
+  resource_type: string
+  resource_id: string | null
+  resource_ref: string | null
+  action: string
+  /** RFC3339 UTC. */
+  created_at: string
+}
+
+export async function listAuditLog(
+  orgId: string,
+  params?: { cursor?: string | null; limit?: number; resource_type?: string; action?: string },
+  signal?: AbortSignal,
+): Promise<CursorPage<AuditEntry>> {
+  const qs = new URLSearchParams()
+  if (params?.cursor != null) qs.set('cursor', params.cursor)
+  if (params?.limit != null) qs.set('limit', String(params.limit))
+  if (params?.resource_type) qs.set('resource_type', params.resource_type)
+  if (params?.action) qs.set('action', params.action)
+  const suffix = qs.toString() ? `?${qs}` : ''
+  const { data } = await api.get<CursorPage<AuditEntry>>(`/v1/orgs/${orgId}/audit${suffix}`, { signal })
+  return data
+}
+
 // ─── Auth Providers ───────────────────────────────────────────────────────────
 
 // Wire shapes match the gateway `auth_providers` routes
