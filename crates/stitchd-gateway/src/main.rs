@@ -155,19 +155,11 @@ async fn main() -> anyhow::Result<()> {
 
     let mut app = build_router(Arc::clone(&state_arc), metrics_handle);
 
-    // ── Edge middleware backed by the shared PgPool ─────────────────────────
-    // Audit capture (audit_log_20260611) records successful admin mutations from
-    // the request's RbacContext; the Idempotency-Key middleware
-    // (platform_hardening_20260608) dedups mutations. Both are layered OUTSIDE
-    // the router, self-filter to mutating methods, and fail open.
+    // ── Idempotency-Key middleware (platform_hardening_20260608) ────────────
+    // Layered OUTSIDE the router; dedups mutations; fail-open. (Audit capture is
+    // layered INSIDE build_router, inner to auth_middleware, so it can observe
+    // the injected RbacContext — see crate::audit / audit_capture_fix_20260611.)
     if let Some(pool) = edge_pool {
-        let audit_writer = Arc::new(stitchd_gateway::audit::PgAuditWriter::new(pool.clone()));
-        app = app.layer(axum::middleware::from_fn_with_state(
-            audit_writer,
-            stitchd_gateway::audit::audit_middleware,
-        ));
-        info!("audit capture middleware enabled");
-
         let ttl = stitchd_gateway::idempotency::ttl_from_env();
         stitchd_gateway::idempotency::spawn_sweeper(pool.clone(), ttl);
         let store: Arc<dyn stitchd_gateway::idempotency::IdempotencyStore> =

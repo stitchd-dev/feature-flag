@@ -94,6 +94,12 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
             delete(admin::remove_org_user),
         )
         .with_state(Arc::clone(&state))
+        // Audit capture — innermost so it observes the RbacContext that
+        // auth_middleware (outer) injects (audit_capture_fix_20260611).
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&state),
+            crate::audit::audit_middleware,
+        ))
         .layer(middleware::from_fn(require_system_org))
         .layer(middleware::from_fn_with_state(
             Arc::clone(&auth_client),
@@ -161,6 +167,11 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
 
     let mgmt_routes = mgmt_read
         .merge(mgmt_write)
+        // Audit capture — innermost (audit_capture_fix_20260611).
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&state),
+            crate::audit::audit_middleware,
+        ))
         .layer(middleware::from_fn(require_non_system_org))
         .layer(middleware::from_fn_with_state(
             Arc::clone(&auth_client),
@@ -500,9 +511,13 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
         .with_state(Arc::clone(&state))
         .layer(middleware::from_fn(require_write_permission));
 
-    let resource_routes =
-        resource_read
+    let resource_routes = resource_read
             .merge(resource_write)
+            // Audit capture — innermost (audit_capture_fix_20260611).
+            .layer(middleware::from_fn_with_state(
+                Arc::clone(&state),
+                crate::audit::audit_middleware,
+            ))
             .layer(middleware::from_fn_with_state(
                 Arc::clone(&auth_client),
                 auth_middleware,

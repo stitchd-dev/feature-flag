@@ -20,6 +20,16 @@ use crate::state::GatewayState;
 /// Lazily-connected clients pointing at unused localhost ports.
 /// The connections are lazy — they fail only when the first RPC is made.
 pub fn make_stub_state() -> Arc<GatewayState> {
+    Arc::new(stub_gateway_state())
+}
+
+/// Like [`make_stub_state`] but with an attached audit/edge `PgPool` — for
+/// tests that exercise the audit read endpoint or capture middleware.
+pub fn make_stub_state_with_audit(pool: sqlx::PgPool) -> Arc<GatewayState> {
+    Arc::new(stub_gateway_state().with_audit_pool(pool))
+}
+
+fn stub_gateway_state() -> GatewayState {
     let flag_channel = Channel::from_static("http://127.0.0.1:2").connect_lazy();
     let seg_channel = Channel::from_static("http://127.0.0.1:3").connect_lazy();
     let auth = AuthServiceClient::new(Channel::from_static("http://127.0.0.1:1").connect_lazy());
@@ -39,7 +49,7 @@ pub fn make_stub_state() -> Arc<GatewayState> {
     let saml_login =
         SamlLoginServiceClient::new(Channel::from_static("http://127.0.0.1:9").connect_lazy());
     let stats = StatsServiceClient::new(Channel::from_static("http://127.0.0.1:10").connect_lazy());
-    Arc::new(GatewayState::from_channels(
+    GatewayState::from_channels(
         auth,
         flag,
         flag_channel,
@@ -52,5 +62,5 @@ pub fn make_stub_state() -> Arc<GatewayState> {
         oidc_login,
         saml_login,
         stats,
-    ))
+    )
 }
