@@ -25,3 +25,12 @@ best-effort last UUID path segment else NULL (creates → NULL; created-id +
 field diffs are follow-ups). NEVER fabricate.
 
 <!-- impl notes below -->
+
+## Design refinement (Phase 1)
+Gateway depends on sqlx but NOT stitchd-db, and owns its edge-state SQL
+(idempotency uses sqlx::query! directly via its pool). So ALL audit read+write
+lives in the gateway crate via its pool — the stitchd-db AuditLogger trait stays
+untouched (test-only scaffolding; no prod churn). Migration (org_id) lives in
+stitchd-db/migrations (canonical). Local builds: DATABASE_URL set + SQLX_OFFLINE
+unset → query! validates live; run `cargo sqlx prepare --workspace` before commit
+so CI (SQLX_OFFLINE=true + prepare --check) passes.
