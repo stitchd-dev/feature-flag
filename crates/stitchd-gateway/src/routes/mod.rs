@@ -22,6 +22,7 @@ pub fn require_permission(
 }
 
 pub mod admin;
+pub mod audit;
 pub mod auth;
 pub mod auth_providers;
 pub mod context_intel;

@@ -1364,6 +1364,7 @@ mod tests {
             flag_sdk_backend_client: Arc::clone(&stub.flag_sdk_backend_client),
             segmentation_sdk_backend_client: Arc::clone(&stub.segmentation_sdk_backend_client),
             schedule_client: Arc::clone(&stub.schedule_client),
+            audit_pool: stub.audit_pool.clone(),
         })
     }
 

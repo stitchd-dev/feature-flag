@@ -51,6 +51,11 @@ pub struct GatewayState {
     /// Schedule service gRPC client (scheduled-change CRUD/lifecycle).
     /// (flag_lifecycle_20260604)
     pub schedule_client: Arc<Mutex<ScheduleServiceClient<Channel>>>,
+    /// Narrowly-scoped edge PgPool for the audit read endpoint
+    /// (audit_log_20260611). `None` when `STITCHD_DATABASE_URL` is unset — the
+    /// gateway is otherwise DB-free. Shares the same pool as the audit/idempotency
+    /// middleware.
+    pub audit_pool: Option<sqlx::PgPool>,
 }
 
 impl GatewayState {
@@ -162,6 +167,7 @@ impl GatewayState {
                 SegmentationSdkBackendServiceClient::new(seg_channel_for_sdk),
             )),
             schedule_client: Arc::new(Mutex::new(ScheduleServiceClient::new(schedule_channel))),
+            audit_pool: None,
         })
     }
 
@@ -204,7 +210,15 @@ impl GatewayState {
             schedule_client: Arc::new(Mutex::new(ScheduleServiceClient::new(
                 Channel::from_static("http://127.0.0.1:1").connect_lazy(),
             ))),
+            audit_pool: None,
         }
+    }
+
+    /// Attach the edge PgPool used by the audit read endpoint.
+    #[must_use]
+    pub fn with_audit_pool(mut self, pool: sqlx::PgPool) -> Self {
+        self.audit_pool = Some(pool);
+        self
     }
 
     /// Override the schedule-service client (used by schedule-route tests to

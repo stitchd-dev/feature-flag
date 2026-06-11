@@ -85,7 +85,7 @@ async fn main() -> anyhow::Result<()> {
     let downstream_summary = format!(
         "auth={auth_addr} flag={flag_addr} seg={segmentation_addr} analytics={analytics_addr} experimentation={experimentation_addr} stats={stats_addr} schedule={schedule_addr}"
     );
-    let state =
+    let mut state =
         connect_with_retry_default("gateway downstream services", &downstream_summary, || {
             let auth_addr = auth_addr.clone();
             let flag_addr = flag_addr.clone();
@@ -119,6 +119,34 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(50050);
     let grpc_addr: SocketAddr = format!("0.0.0.0:{grpc_port}").parse()?;
 
+    // ── Edge PgPool (audit + idempotency) ───────────────────────────────────
+    // Created once and shared by the audit/idempotency middleware AND the audit
+    // read endpoint (via GatewayState.audit_pool). Opt-in by deployment: only
+    // when STITCHD_DATABASE_URL is set (the gateway is otherwise DB-free).
+    let edge_pool: Option<sqlx::PgPool> = match std::env::var("STITCHD_DATABASE_URL") {
+        Ok(database_url) => match sqlx::postgres::PgPoolOptions::new()
+            .max_connections(5)
+            .connect(&database_url)
+            .await
+        {
+            Ok(pool) => {
+                state = state.with_audit_pool(pool.clone());
+                Some(pool)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "STITCHD_DATABASE_URL set but Postgres connect failed; \
+                     audit + idempotency middleware DISABLED: {e}"
+                );
+                None
+            }
+        },
+        Err(_) => {
+            info!("STITCHD_DATABASE_URL unset — audit + idempotency middleware disabled");
+            None
+        }
+    };
+
     // Capture the two SDK backend clients BEFORE we move `state` into the
     // Axum router — both servers need them.
     let state_arc = Arc::new(state);
@@ -127,38 +155,28 @@ async fn main() -> anyhow::Result<()> {
 
     let mut app = build_router(Arc::clone(&state_arc), metrics_handle);
 
-    // ── Idempotency-Key middleware (platform_hardening_20260608) ────────────
-    // HTTP-edge request dedup backed by a narrowly-scoped PgPool. Opt-in by
-    // deployment: only enabled when STITCHD_DATABASE_URL is set (the gateway is
-    // otherwise DB-free). Layered OUTSIDE the router so it applies to every
-    // mutating route; it self-filters to POST/PUT/PATCH/DELETE carrying an
-    // `Idempotency-Key` header and fails open on any store error.
-    if let Ok(database_url) = std::env::var("STITCHD_DATABASE_URL") {
-        match sqlx::postgres::PgPoolOptions::new()
-            .max_connections(5)
-            .connect(&database_url)
-            .await
-        {
-            Ok(pool) => {
-                let ttl = stitchd_gateway::idempotency::ttl_from_env();
-                stitchd_gateway::idempotency::spawn_sweeper(pool.clone(), ttl);
-                let store: Arc<dyn stitchd_gateway::idempotency::IdempotencyStore> =
-                    Arc::new(stitchd_gateway::idempotency::PgIdempotencyStore::new(pool));
-                app = app.layer(axum::middleware::from_fn_with_state(
-                    store,
-                    stitchd_gateway::idempotency::idempotency_middleware,
-                ));
-                info!(ttl_secs = ttl.as_secs(), "idempotency middleware enabled");
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "STITCHD_DATABASE_URL set but Postgres connect failed; \
-                     idempotency middleware DISABLED: {e}"
-                );
-            }
-        }
-    } else {
-        info!("STITCHD_DATABASE_URL unset — idempotency middleware disabled");
+    // ── Edge middleware backed by the shared PgPool ─────────────────────────
+    // Audit capture (audit_log_20260611) records successful admin mutations from
+    // the request's RbacContext; the Idempotency-Key middleware
+    // (platform_hardening_20260608) dedups mutations. Both are layered OUTSIDE
+    // the router, self-filter to mutating methods, and fail open.
+    if let Some(pool) = edge_pool {
+        let audit_writer = Arc::new(stitchd_gateway::audit::PgAuditWriter::new(pool.clone()));
+        app = app.layer(axum::middleware::from_fn_with_state(
+            audit_writer,
+            stitchd_gateway::audit::audit_middleware,
+        ));
+        info!("audit capture middleware enabled");
+
+        let ttl = stitchd_gateway::idempotency::ttl_from_env();
+        stitchd_gateway::idempotency::spawn_sweeper(pool.clone(), ttl);
+        let store: Arc<dyn stitchd_gateway::idempotency::IdempotencyStore> =
+            Arc::new(stitchd_gateway::idempotency::PgIdempotencyStore::new(pool));
+        app = app.layer(axum::middleware::from_fn_with_state(
+            store,
+            stitchd_gateway::idempotency::idempotency_middleware,
+        ));
+        info!(ttl_secs = ttl.as_secs(), "idempotency middleware enabled");
     }
 
     info!(%addr, %grpc_addr, "stitchd-gateway starting (REST + SDK gRPC)");

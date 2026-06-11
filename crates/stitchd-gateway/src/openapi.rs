@@ -27,6 +27,8 @@ use utoipa::{
     paths(
         // Auth
         crate::routes::auth::login,
+        // Audit log (audit_log_20260611)
+        crate::routes::audit::list_audit,
         // Superadmin (system-org only)
         crate::routes::admin::create_org,
         crate::routes::admin::seed_user,
@@ -124,6 +126,7 @@ use utoipa::{
             // Auth
             crate::routes::auth::LoginBody,
             crate::routes::auth::LoginJson,
+            crate::routes::audit::AuditEntryJson,
             // Superadmin
             crate::routes::admin::CreateOrgBody,
             crate::routes::admin::OrgJson,
