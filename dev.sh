@@ -127,8 +127,13 @@ case "$CMD" in
     # Tier 2 — depend on analytics and flag being ready
     start_service "experimentation-service" "stitchd-experimentation-service"
     start_service "stats-service"           "stitchd-stats-service"
+    # schedule-service (flag_lifecycle_20260604) — the gateway dials it at
+    # startup (STITCHD_SCHEDULE_SERVICE_ADDR, default :50057), so it MUST be up
+    # before the gateway or the gateway fails to connect.
+    start_service "schedule-service"        "stitchd-schedule-service"
     wait_for_port "${STITCHD_EXPERIMENTATION_SERVICE_GRPC_PORT}" "experimentation-service"
     wait_for_port "${STITCHD_STATS_SERVICE_GRPC_PORT}"     "stats-service"
+    wait_for_port "${STITCHD_SCHEDULE_SERVICE_GRPC_PORT:-50057}" "schedule-service"
     # Tier 3 — gateway requires all upstream services
     start_service "gateway"                "stitchd-gateway"
     ;;
@@ -138,10 +143,11 @@ case "$CMD" in
   analytics)   start_service "analytics-service"      "stitchd-analytics-service" ;;
   experimentation) start_service "experimentation-service" "stitchd-experimentation-service" ;;
   stats)       start_service "stats-service"          "stitchd-stats-service" ;;
+  schedule)    start_service "schedule-service"       "stitchd-schedule-service" ;;
   gateway)     start_service "gateway"               "stitchd-gateway" ;;
   *)
     echo "Unknown command: $CMD"
-    echo "Usage: $0 [all|stop|logs|logs:<svc>|auth|flag|segmentation|analytics|experimentation|stats|gateway]"
+    echo "Usage: $0 [all|stop|logs|logs:<svc>|auth|flag|segmentation|analytics|experimentation|stats|schedule|gateway]"
     exit 1
     ;;
 esac
