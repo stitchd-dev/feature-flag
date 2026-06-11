@@ -19,3 +19,16 @@ gateway capture) is a larger separate effort — filed as follow-up.
 Re-layer audit INNER to auth on the authed groups; audit reads RbacContext +
 state.audit_pool. Tower: group.layer(audit).layer(auth) → auth outer (inserts
 ctx) → audit inner (reads ctx) → handler.
+
+## Live verification (PASS)
+After re-layering: real org-admin login → create project/env/flag + toggle →
+GET /v1/orgs/{org}/audit returned 4 org-scoped rows (project.create,
+environment.create, flag.create, flag.update) each with actor=v@verify.org
+(email resolved) and resource_ref captured (flag.update→verify-flag). Cross-org
+read → HTTP 401. resource_type=flag filter → 2 rows. Gateway tests 15 audit +
+full suite green; clippy -D warnings + fmt; sqlx-check offline.
+
+## Follow-up filed
+Unify service-side audit (richer resource_id + diff, currently written with NULL
+actor/org and invisible on the org page) by propagating actor+org to services
+and making them the sole audit writer — larger cross-service refactor.

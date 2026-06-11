@@ -213,15 +213,18 @@ impl PgAuditWriter {
     }
 }
 
-/// Edge middleware that records successful admin mutations. Layered outside the
-/// router (same as idempotency); skips non-mutating, unauthenticated, and
-/// unmapped traffic; fail-open.
+/// Middleware that records successful admin mutations. Layered INNER to
+/// `auth_middleware` on the authenticated route groups so the injected
+/// `RbacContext` is visible at capture time. Sources the edge pool from
+/// `GatewayState.audit_pool` (no-op when unset); fail-open.
 pub async fn audit_middleware(
-    State(writer): State<Arc<PgAuditWriter>>,
+    State(state): State<Arc<crate::state::GatewayState>>,
     req: Request,
     next: Next,
 ) -> Response {
-    // Capture what we need before the request is consumed by the handler.
+    // Capture what we need before the request is consumed by the handler. The
+    // RbacContext is present because `auth_middleware` (layered OUTER to this)
+    // has already run and inserted it.
     let method = req.method().clone();
     let path = req.uri().path().to_owned();
     let rbac = req.extensions().get::<RbacContext>().map(|c| {
@@ -233,13 +236,14 @@ pub async fn audit_middleware(
 
     let resp = next.run(req).await;
 
-    if should_record(&method, resp.status())
+    if let Some(pool) = state.audit_pool.clone()
+        && should_record(&method, resp.status())
         && let Some((actor_id, org_id)) = rbac
         && let Some(action) = resource_for(&path, &method)
     {
         // Fire-and-forget: never add latency or fail the request on audit.
-        let writer = Arc::clone(&writer);
         tokio::spawn(async move {
+            let writer = PgAuditWriter::new(pool);
             if let Err(e) = writer.record(org_id, actor_id, &action).await {
                 tracing::warn!("audit write failed (best-effort): {e}");
             }
@@ -263,17 +267,19 @@ mod tests {
 
         let org = Uuid::new_v4();
         let actor = Uuid::new_v4();
-        let writer = Arc::new(PgAuditWriter::new(pool.clone()));
+        // GatewayState with the audit pool attached — mirrors how build_router
+        // wires the middleware (it reads state.audit_pool).
+        let state = crate::tests::helpers::make_stub_state_with_audit(pool.clone());
 
         // A minimal app: PUT a mapped flag route → 200, with the audit middleware
-        // and a preceding layer that injects an RbacContext (as the real auth
-        // middleware would).
+        // (inner) and a preceding layer that injects an RbacContext (as the real
+        // auth_middleware would, outer).
         let app = Router::new()
             .route(
                 "/v1/projects/{pid}/flags/{key}",
                 put(|| async { StatusCode::OK }),
             )
-            .layer(from_fn_with_state(writer, audit_middleware))
+            .layer(from_fn_with_state(state, audit_middleware))
             .layer(from_fn(
                 move |mut req: Request<Body>, next: Next| async move {
                     req.extensions_mut().insert(RbacContext {
