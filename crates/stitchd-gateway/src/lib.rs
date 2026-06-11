@@ -13,6 +13,7 @@
 
 #![deny(warnings, clippy::all)]
 
+pub mod audit;
 pub mod error;
 pub mod grpc_server;
 pub mod idempotency;

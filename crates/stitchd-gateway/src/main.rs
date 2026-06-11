@@ -140,6 +140,17 @@ async fn main() -> anyhow::Result<()> {
             .await
         {
             Ok(pool) => {
+                // Audit capture (audit_log_20260611): records successful admin
+                // mutations from the request's RbacContext. Layered alongside
+                // idempotency on the same edge pool; fail-open.
+                let audit_writer =
+                    Arc::new(stitchd_gateway::audit::PgAuditWriter::new(pool.clone()));
+                app = app.layer(axum::middleware::from_fn_with_state(
+                    audit_writer,
+                    stitchd_gateway::audit::audit_middleware,
+                ));
+                info!("audit capture middleware enabled");
+
                 let ttl = stitchd_gateway::idempotency::ttl_from_env();
                 stitchd_gateway::idempotency::spawn_sweeper(pool.clone(), ttl);
                 let store: Arc<dyn stitchd_gateway::idempotency::IdempotencyStore> =
