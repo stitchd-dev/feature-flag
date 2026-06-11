@@ -1,0 +1,12 @@
+{
+  "track_id": "audit_capture_fix_20260611",
+  "type": "bug",
+  "status": "new",
+  "priority": "critical",
+  "depends_on": [],
+  "created_at": "2026-06-11T03:12:00Z",
+  "updated_at": "2026-06-11T03:12:00Z",
+  "description": "Fix: audit_middleware layered outside the router cannot see RbacContext (org/actor NULL, audit page empty). Re-layer inner to auth_middleware, source pool from GatewayState. Found via live verification.",
+  "git_branch": "track/audit_capture_fix_20260611",
+  "worktree_path": ".worktrees/audit_capture_fix_20260611"
+}
