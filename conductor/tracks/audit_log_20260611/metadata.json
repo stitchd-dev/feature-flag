@@ -11,5 +11,13 @@
   "git_branch": "track/audit_log_20260611",
   "worktree_path": ".worktrees/audit_log_20260611",
   "beads_wisp": "feature-flag-wisp-99m",
-  "beads_area_issue": "feature-flag-bpc"
+  "beads_area_issue": "feature-flag-bpc",
+  "beads_epic": "feature-flag-1s7",
+  "beads_tasks": {
+    "phase1": "feature-flag-1s7.1",
+    "phase2": "feature-flag-1s7.2",
+    "phase3": "feature-flag-1s7.3",
+    "phase4": "feature-flag-1s7.4",
+    "phase5": "feature-flag-1s7.5"
+  }
 }
